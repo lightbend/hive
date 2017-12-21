@@ -5348,7 +5348,7 @@
   </property>
   <property>
     <name>spark.master</name>
-    <value>mesos://spark-nohive.marathon.mesos:13636</value>
+    <value>mesos://spark-for-hive.marathon.mesos:13636</value>
     <description>Spark Master URL.</description>
   </property>
   <property>
@@ -5383,7 +5383,7 @@
   </property>
   <property>
     <name>spark.docker.image</name>
-    <value>blublinsky/fdp-spark-nohive:1.0.0</value>
+    <value>lightbend/fdp-spark-for-hive:1.0.0</value>
     <description>Spark docker image to use</description>
   </property>
   <property>

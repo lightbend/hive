@@ -112,17 +112,19 @@ Useful mailing lists
 What is special about this version
 ===================================
 
-This version of Hive is modified `org.apache.hive.spark.client.SparkClientImpl` in `spark-client`
-Modifications are numerous (compare to the [original](https://github.com/apache/hive/blob/master/spark-client/src/main/java/org/apache/hive/spark/client/SparkClientImpl.java)).
-The main point is to enable usage of the Spark server running on Mesos.
+This version of Hive has modified `org.apache.hive.spark.client.SparkClientImpl` in `spark-client` module. Modifications are numerous (compare to the [original](https://github.com/apache/hive/blob/master/spark-client/src/main/java/org/apache/hive/spark/client/SparkClientImpl.java)).
+
+These changes enable the usage of Spark server running on Mesos.
+
 Here is a quick usage sample (also look at [Hive on Spark getting Started](https://cwiki.apache.org/confluence/display/Hive/Hive+on+Spark%3A+Getting+Started))
-* Build Hive using `mvn clean package -Pdist -DskipTests`. The results of build are at `packaging/target`
+
+* Build Hive using `mvn clean package -Pdist -DskipTests`. The results of the build are at `packaging/target`
 * Make sure you can connect remote Spark server. I used the following:
-````
+````shell
 spark-submit \
-	--master mesos://spark-nohive.marathon.mesos:15457  \
+	--master mesos://spark-for-hive.marathon.mesos:15457  \
 	--deploy-mode cluster  \
-	--conf spark.mesos.executor.docker.image=blublinsky/fdp-spark-nohive:latest  \
+	--conf spark.mesos.executor.docker.image=lightbend/fdp-spark-for-hive:latest  \
 	--conf spark.mesos.driver.labels=DCOS_SPACE:/spark  \
 	--conf spark.mesos.task.labels=DCOS_SPACE:/spark  \
 	--conf spark.executor.cores=2  \
@@ -130,13 +132,13 @@ spark-submit \
 	--conf driver.memory=2g  \
 	--conf spark.cores.max=8  \
 	--class org.apache.spark.examples.SparkPi  http://jim-lab.marathon.mesos/spark-examples_2.11-2.2.0.jar  1000  
-```` 
+````
 Make sure to set the port correctly
 * Copy `hive-site.xml` from `conf` directory to the `conf` directory of created distribution. Make sure to update
 ```
   <property>
     <name>spark.master</name>
-    <value>mesos://spark-nohive.marathon.mesos:15457</value>
+    <value>mesos://spark-for-hive.marathon.mesos:15457</value>
     <description>Spark Master URL.</description>
 ```
 and
@@ -149,12 +151,12 @@ and
 ````
 with the locations that you need and any other parameters.
 * Copy the folowing jars to the `lib` directory from your corresponding Spark - 
-`scala-library`, `spark-core` and `spark-network-common` 
+  `scala-library`, `spark-core` and `spark-network-common` 
 * Make sure to set Hadoop and Spark home (yes you need local spark to use Spark-submit) using the following:
 ````
 export HADOOP_HOME=...
 export SPARK_HOME=..
-````  
+````
 * If this is the first Hive usage, create database (I am using Derby)
 ````
 ./bin/schematool -dbType derby -initSchema
@@ -219,6 +221,6 @@ and RPC connection to it is establish. The cluster will not be destroyed until
 Hive is not completed. This means two things:
 * First request to Spark is significantly slower compared to subsequent requests
 * When deciding on the size of the cluster, make sure you create large enough
-cluster for any Hive operation.
+  cluster for any Hive operation.
 
 
