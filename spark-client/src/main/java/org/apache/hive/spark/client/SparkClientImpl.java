@@ -17,21 +17,7 @@
 
 package org.apache.hive.spark.client;
 
-import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHENTICATION;
 import static org.apache.hive.spark.client.SparkClientUtilities.HIVE_KRYO_REG_NAME;
-
-import com.google.common.base.Charsets;
-import com.google.common.base.Joiner;
-import com.google.common.base.Strings;
-import com.google.common.base.Preconditions;
-import com.google.common.base.Throwables;
-import com.google.common.collect.Lists;
-import com.google.common.collect.Maps;
-import com.google.common.io.Resources;
-
-import io.netty.channel.ChannelHandlerContext;
-import io.netty.util.concurrent.GenericFutureListener;
-import io.netty.util.concurrent.Promise;
 
 import java.io.ByteArrayInputStream;
 import java.io.File;
@@ -52,20 +38,9 @@ import java.util.UUID;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
 
-import org.apache.commons.lang3.StringUtils;
-import org.apache.hadoop.hive.common.log.LogRedirector;
-import org.apache.hadoop.hive.conf.Constants;
-import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.hive.conf.HiveConf.ConfVars;
-import org.apache.hadoop.hive.shims.Utils;
-import org.apache.hadoop.security.SecurityUtil;
 import org.apache.hive.spark.client.rpc.Rpc;
 import org.apache.hive.spark.client.rpc.RpcConfiguration;
 import org.apache.hive.spark.client.rpc.RpcServer;
-import org.apache.spark.SparkContext;
-import org.apache.spark.SparkException;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 class SparkClientImpl implements SparkClient {
   private static final long serialVersionUID = 1L;
@@ -398,6 +373,82 @@ class SparkClientImpl implements SparkClient {
           argv.add(numOfExecutors);
         }
       }
+
+      if(master.startsWith("mesos")){
+        argv.add("--master");
+        argv.add(master);
+        argv.add("--deploy-mode");
+        argv.add(deployMode);
+        argv.add("--conf");
+        argv.add("spark.ssl.noCertVerification=true");
+        String dockerImage = conf.getOrDefault("spark.docker.image", "mesosphere/spark:1.1.1-2.2.0-hadoop-2.6");
+        argv.add("--conf");
+        argv.add("spark.mesos.executor.docker.image=" + dockerImage);
+        argv.add("--conf");
+        argv.add("spark.mesos.driver.labels=DCOS_SPACE:/spark");
+        argv.add("--conf");
+        argv.add("spark.mesos.task.labels=DCOS_SPACE:/spark");
+        argv.add("--conf");
+        argv.add("spark.mesos.role=*");
+
+        argv.add("--conf");
+        argv.add(SparkClientFactory.CONF_CLIENT_ID + "=" + clientId);
+        argv.add("--conf");
+        argv.add(SparkClientFactory.CONF_KEY_SECRET + "=" + secret);
+
+        argv.add("--conf");
+        argv.add("spark.mesos.executor.home=/opt/spark/dist");
+
+
+        String executorCores = conf.get("spark.executor.cores");
+        if (executorCores != null) {
+          argv.add("--conf");
+          argv.add("spark.executor.cores=" + executorCores);
+        }
+
+        String executorMemory = conf.get("spark.executor.memory");
+        if (executorMemory != null) {
+          argv.add("--conf");
+          argv.add("spark.executor.memory=" + executorMemory);
+        }
+
+        String driverMemory = conf.get("spark.driver.memory");
+        if (driverMemory != null) {
+          argv.add("--conf");
+          argv.add("driver.memory=" + driverMemory);
+        }
+
+        String maxExecutorCores = conf.get("spark.cores.max");
+        if (maxExecutorCores != null) {
+          argv.add("--conf");
+          argv.add("spark.cores.max=" + maxExecutorCores);
+        }
+
+        // Add configuration parameters neded by remote driver
+        for (Map.Entry<String, String> e : conf.entrySet()) {
+          if(RpcConfiguration.HIVE_SPARK_RSC_CONFIGS.contains(e.getKey())
+                  || RpcConfiguration.HIVE_SPARK_TIME_CONFIGS.contains(e.getKey())){
+            argv.add("--conf");
+            argv.add(e.getKey() + "=" + e.getValue());
+          }
+        }
+        argv.add("--conf");
+        argv.add("hive.spark.client.rpc.server.address=" + serverAddress);
+
+        argv.add("--conf");
+        argv.add("spark.serializer=org.apache.spark.serializer.KryoSerializer");
+
+        argv.add("--conf");
+        argv.add("spark.kryo.registrationRequired=false");
+
+        argv.add("--conf");
+        argv.add("spark.kryo.referenceTracking=false");
+
+        argv.add("--conf");
+        argv.add("spark.kryo.classesToRegister=org.apache.hadoop.hive.ql.io.HiveKey,org.apache.hadoop.io.BytesWritable,org.apache.hadoop.hive.ql.exec.vector.VectorizedRowBatch");
+
+      }
+
       // The options --principal/--keypad do not work with --proxy-user in spark-submit.sh
       // (see HIVE-15485, SPARK-5493, SPARK-19143), so Hive could only support doAs or
       // delegation token renewal, but not both. Since doAs is a more common case, if both
@@ -449,16 +500,22 @@ class SparkClientImpl implements SparkClient {
         argv.add(SparkClientUtilities.findKryoRegistratorJar(hiveConf));
       }
 
-      argv.add("--properties-file");
-      argv.add(properties.getAbsolutePath());
       argv.add("--class");
       argv.add(RemoteDriver.class.getName());
 
-      String jar = "spark-internal";
-      if (SparkContext.jarOfClass(this.getClass()).isDefined()) {
-        jar = SparkContext.jarOfClass(this.getClass()).get();
+      if(master.startsWith("mesos")){
+        String jar = conf.getOrDefault("spark.hive.jar.location", "http://jim-lab.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar");
+        argv.add(jar);
       }
-      argv.add(jar);
+      else{
+        String jar = "spark-internal";
+        if (SparkContext.jarOfClass(this.getClass()).isDefined()) {
+          jar = SparkContext.jarOfClass(this.getClass()).get();
+        }
+        argv.add(jar);
+        argv.add("--properties-file");
+        argv.add(properties.getAbsolutePath());
+      }
 
       argv.add("--remote-host");
       argv.add(serverAddress);
