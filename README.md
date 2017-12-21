@@ -108,3 +108,119 @@ Useful mailing lists
 3. commits@hive.apache.org - In order to monitor commits to the source
    repository. Send an empty email to commits-subscribe@hive.apache.org
    in order to subscribe to this mailing list.
+
+What is special about this version
+===================================
+
+This version of Hive has modified `org.apache.hive.spark.client.SparkClientImpl` in `spark-client` module. Modifications are numerous (compare to the [original](https://github.com/apache/hive/blob/master/spark-client/src/main/java/org/apache/hive/spark/client/SparkClientImpl.java)).
+
+These changes enable the usage of Spark server running on Mesos.
+
+Here is a quick usage sample (also look at [Hive on Spark getting Started](https://cwiki.apache.org/confluence/display/Hive/Hive+on+Spark%3A+Getting+Started))
+
+* Build Hive using `mvn clean package -Pdist -DskipTests`. The results of the build are at `packaging/target`
+* Make sure you can connect remote Spark server. I used the following:
+````shell
+spark-submit \
+	--master mesos://spark-for-hive.marathon.mesos:15457  \
+	--deploy-mode cluster  \
+	--conf spark.mesos.executor.docker.image=lightbend/fdp-spark-for-hive:latest  \
+	--conf spark.mesos.driver.labels=DCOS_SPACE:/spark  \
+	--conf spark.mesos.task.labels=DCOS_SPACE:/spark  \
+	--conf spark.executor.cores=2  \
+	--conf spark.executor.memory=2g  \
+	--conf driver.memory=2g  \
+	--conf spark.cores.max=8  \
+	--class org.apache.spark.examples.SparkPi  http://jim-lab.marathon.mesos/spark-examples_2.11-2.2.0.jar  1000  
+````
+Make sure to set the port correctly
+* Copy `hive-site.xml` from `conf` directory to the `conf` directory of created distribution. Make sure to update
+```
+  <property>
+    <name>spark.master</name>
+    <value>mesos://spark-for-hive.marathon.mesos:15457</value>
+    <description>Spark Master URL.</description>
+```
+and
+````
+  <property>
+    <name>spark.hive.jar.location</name>
+    <value>http://jim-lab.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar</value>
+    <description>URL accessable Hive jar</description>
+  </property>
+````
+with the locations that you need and any other parameters.
+* Copy the folowing jars to the `lib` directory from your corresponding Spark - 
+  `scala-library`, `spark-core` and `spark-network-common` 
+* Make sure to set Hadoop and Spark home (yes you need local spark to use Spark-submit) using the following:
+````
+export HADOOP_HOME=...
+export SPARK_HOME=..
+````
+* If this is the first Hive usage, create database (I am using Derby)
+````
+./bin/schematool -dbType derby -initSchema
+````
+and HDFS directories required for Hive 
+````
+hdfs dfs -mkdir -p /user/hive/warehouse
+hdfs dfs -mkdir -p /tmp
+hdfs dfs -chmod g+w /tmp
+hdfs dfs -chmod g+w /user/hive/warehouse
+````
+
+* Run hive - `hive`
+* Test your installation using [Hive Getting Started](https://cwiki.apache.org/confluence/display/Hive/GettingStarted)
+
+If everything works ok, after executing:
+
+````
+hive> CREATE TABLE u_data (
+    >   userid INT,
+    >   movieid INT,
+    >   rating INT,
+    >   unixtime STRING)
+    > ROW FORMAT DELIMITED
+    > FIELDS TERMINATED BY '\t'
+    > STORED AS TEXTFILE;
+hive> LOAD DATA LOCAL INPATH '../ml-100k/u.data' OVERWRITE INTO TABLE u_data; 
+hive> SELECT COUNT(*) FROM u_data;    
+````
+You should see something like:
+
+````
+Query ID = admin_20171029012558_63f760be-14bc-49ec-89ca-b4f3a35118e2
+Total jobs = 1
+Launching Job 1 out of 1
+In order to change the average load for a reducer (in bytes):
+  set hive.exec.reducers.bytes.per.reducer=<number>
+In order to limit the maximum number of reducers:
+  set hive.exec.reducers.max=<number>
+In order to set a constant number of reducers:
+  set mapreduce.job.reduces=<number>
+Starting Spark Job = d07b0c14-2a96-488d-af00-15eee4175f6a
+
+Query Hive on Spark job[0] stages: [0, 1]
+
+Status: Running (Hive on Spark job[0])
+--------------------------------------------------------------------------------------
+          STAGES   ATTEMPT        STATUS  TOTAL  COMPLETED  RUNNING  PENDING  FAILED  
+--------------------------------------------------------------------------------------
+Stage-0 ........         0      FINISHED      1          1        0        0       0  
+Stage-1 ........         0      FINISHED      1          1        0        0       0  
+--------------------------------------------------------------------------------------
+STAGES: 02/02    [==========================>>] 100%  ELAPSED TIME: 11.20 s    
+--------------------------------------------------------------------------------------
+Status: Finished successfully in 11.20 seconds
+OK
+100000
+
+````
+The way Hive on Spark works is that when a first time a call to Spark is made, a cluster is created
+and RPC connection to it is establish. The cluster will not be destroyed until 
+Hive is not completed. This means two things:
+* First request to Spark is significantly slower compared to subsequent requests
+* When deciding on the size of the cluster, make sure you create large enough
+  cluster for any Hive operation.
+
+
