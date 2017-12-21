@@ -5348,7 +5348,7 @@
   </property>
   <property>
     <name>spark.master</name>
-    <value>mesos://spark-for-hive.marathon.mesos:13636</value>
+    <value>mesos://spark-for-hive.marathon.mesos:6234</value>
     <description>Spark Master URL.</description>
   </property>
   <property>
