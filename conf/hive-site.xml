@@ -2019,6 +2019,13 @@
     </description>
   </property>
   <property>
+    <name>spark.submit.deployMode</name>
+    <value>cluster</value>
+    <description>
+      Spark deployment mode when using Spark as the execution engine.
+    </description>
+  </property>
+  <property>
     <name>hive.skewjoin.key</name>
     <value>100000</value>
     <description>
@@ -5348,7 +5355,7 @@
   </property>
   <property>
     <name>spark.master</name>
-    <value>mesos://spark-for-hive.marathon.mesos:6234</value>
+    <value>mesos://spark-for-hive.marathon.mesos:28916</value>
     <description>Spark Master URL.</description>
   </property>
   <property>
@@ -5383,13 +5390,13 @@
   </property>
   <property>
     <name>spark.docker.image</name>
-    <value>lightbend/fdp-spark-for-hive:1.0.0</value>
+    <value>lightbend/fdp-spark-for-hive:latest</value>
     <description>Spark docker image to use</description>
   </property>
   <property>
     <name>spark.hive.jar.location</name>
-    <value>http://jim-lab.marathon.mesos/hive-spark-3.0.0-SNAPSHOT.jar</value>
-    <description>URL accessable Hive jar</description>
+    <value>http://fdp-hive-on-spark.marathon.mesos/hive-spark-3.0.0-SNAPSHOT.jar</value>
+    <description>URL accessible Hive jar</description>
   </property>
   <property>
     <name>spark.serializer</name>

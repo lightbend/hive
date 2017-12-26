@@ -388,7 +388,7 @@ class SparkClientImpl implements SparkClient {
         argv.add(deployMode);
         argv.add("--conf");
         argv.add("spark.ssl.noCertVerification=true");
-        String dockerImage = conf.getOrDefault("spark.docker.image", "mesosphere/spark:1.1.1-2.2.0-hadoop-2.6");
+        String dockerImage = conf.getOrDefault("spark.docker.image", "mesosphere/spark:2.2.0-2.2.0-2-beta-hadoop-2.6");
         argv.add("--conf");
         argv.add("spark.mesos.executor.docker.image=" + dockerImage);
         argv.add("--conf");
@@ -511,7 +511,7 @@ class SparkClientImpl implements SparkClient {
       argv.add(RemoteDriver.class.getName());
 
       if(master.startsWith("mesos")){
-        String jar = conf.getOrDefault("spark.hive.jar.location", "http://jim-lab.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar");
+        String jar = conf.getOrDefault("spark.hive.jar.location", "http://fdp-hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar");
         argv.add(jar);
       }
       else{
