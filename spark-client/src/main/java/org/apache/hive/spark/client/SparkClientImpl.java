@@ -388,7 +388,7 @@ class SparkClientImpl implements SparkClient {
         argv.add(deployMode);
         argv.add("--conf");
         argv.add("spark.ssl.noCertVerification=true");
-        String dockerImage = conf.getOrDefault("spark.docker.image", "mesosphere/spark:2.2.0-2.2.0-2-beta-hadoop-2.6");
+        String dockerImage = conf.getOrDefault("spark.docker.image", "lightbend/fdp-spark-for-hive:2.0.0");
         argv.add("--conf");
         argv.add("spark.mesos.executor.docker.image=" + dockerImage);
         argv.add("--conf");
@@ -501,20 +501,34 @@ class SparkClientImpl implements SparkClient {
         }
       }
 
+      String jars = "", jar1 = "", jar2 = "";
       String regStr = conf.get("spark.kryo.registrator");
       if (HIVE_KRYO_REG_NAME.equals(regStr)) {
+        jar1 = SparkClientUtilities.findKryoRegistratorJar(hiveConf);
+        jars += jar1;
+      }
+      if(master.startsWith("mesos")){
+        jar2 = "/opt/hive/lib/hive-exec-3.0.0-SNAPSHOT.jar";
+        if (jar2.length() > 0) {
+          if (jar1.length() > 0) {
+            jars += "," + jar2;
+          } else {
+            jars += jar2;
+          }
+        }
+      }
+      if (jars.length() > 0) {
         argv.add("--jars");
-        argv.add(SparkClientUtilities.findKryoRegistratorJar(hiveConf));
+        argv.add(jars);
       }
 
       argv.add("--class");
       argv.add(RemoteDriver.class.getName());
 
       if(master.startsWith("mesos")){
-        String jar = conf.getOrDefault("spark.hive.jar.location", "http://fdp-hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar");
-        argv.add(jar);
+        argv.add(conf.getOrDefault("spark.hive.jar.location", "http://fdp-hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar"));
       }
-      else{
+      else {
         String jar = "spark-internal";
         if (SparkContext.jarOfClass(this.getClass()).isDefined()) {
           jar = SparkContext.jarOfClass(this.getClass()).get();
