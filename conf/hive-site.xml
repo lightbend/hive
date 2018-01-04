@@ -5355,7 +5355,7 @@
   </property>
   <property>
     <name>spark.master</name>
-    <value>mesos://fdp-spark-for-hive.marathon.mesos:28916</value>
+    <value>mesos://fdp-spark-for-hive.marathon.mesos:7154</value>
     <description>Spark Master URL.</description>
   </property>
   <property>
@@ -5395,8 +5395,13 @@
   </property>
   <property>
     <name>spark.hive.jar.location</name>
-    <value>http://fdp-hive-on-spark.marathon.mesos/hive-spark-3.0.0-SNAPSHOT.jar</value>
+    <value>http://fdp-hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar</value>
     <description>URL accessible Hive jar</description>
+  </property>
+  <property>
+    <name>spark.hive.executor.jars</name>
+    <value>/home/admin/exercises/lib/hive-json-serde-0.3.jar</value>
+    <description>Comma-separated list of jars to be distributed to Spark executors</description>
   </property>
   <property>
     <name>spark.serializer</name>
