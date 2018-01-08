@@ -45,11 +45,8 @@ import java.net.URL;
 import java.util.*;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
-import java.util.stream.Stream;
 
-import static java.util.stream.Collectors.joining;
 import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHENTICATION;
-import static org.apache.hive.spark.client.SparkClientUtilities.HIVE_KRYO_REG_NAME;
 
 class SparkClientImpl implements SparkClient {
   private static final long serialVersionUID = 1L;
@@ -382,7 +379,7 @@ class SparkClientImpl implements SparkClient {
           argv.add(numOfExecutors);
         }
       }
-
+      // Added for support of Mesos
       if(master.startsWith("mesos")){
         argv.add("--master");
         argv.add(master);
@@ -390,7 +387,7 @@ class SparkClientImpl implements SparkClient {
         argv.add(deployMode);
         argv.add("--conf");
         argv.add("spark.ssl.noCertVerification=true");
-        String dockerImage = conf.getOrDefault("spark.docker.image", "lightbend/fdp-spark-for-hive:2.0.0");
+        String dockerImage = conf.getOrDefault("spark.docker.image", "lightbend/fdp-spark-for-hive:2.2.1");
         argv.add("--conf");
         argv.add("spark.mesos.executor.docker.image=" + dockerImage);
         argv.add("--conf");
@@ -502,7 +499,7 @@ class SparkClientImpl implements SparkClient {
           throw new IllegalStateException(msg, e);
         }
       }
-
+/*
       String jar1 = "", jar2 = "", jar3 = "";
       String regStr = conf.get("spark.kryo.registrator");
       if (HIVE_KRYO_REG_NAME.equals(regStr)) {
@@ -519,7 +516,7 @@ class SparkClientImpl implements SparkClient {
         argv.add("--jars");
         argv.add(jars);
       }
-
+*/
       argv.add("--class");
       argv.add(RemoteDriver.class.getName());
 

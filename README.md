@@ -115,10 +115,12 @@ What is special about this version
 This version of Hive has modified `org.apache.hive.spark.client.SparkClientImpl` in `spark-client` module. Modifications are numerous (compare to the [original](https://github.com/apache/hive/blob/master/spark-client/src/main/java/org/apache/hive/spark/client/SparkClientImpl.java)).
 
 These changes enable the usage of Spark server running on Mesos.
+Make sure that `spark.version` is set correctly at [pom file](./pom.xml)
 
 Here is a quick usage sample (also look at [Hive on Spark getting Started](https://cwiki.apache.org/confluence/display/Hive/Hive+on+Spark%3A+Getting+Started))
 
 * Build Hive using `mvn clean package -Pdist -DskipTests`. The results of the build are at `packaging/target`
+* Make sure that Spark that you are using is build without Hive - `./dev/make-distribution.sh --name spark-without-hive --pip --tgz -Phadoop-2.7 -Pmesos -DskipTests` This build Spark without Hive with Python, but no R 
 * Make sure you can connect remote Spark server. I used the following:
 ````shell
 spark-submit \
