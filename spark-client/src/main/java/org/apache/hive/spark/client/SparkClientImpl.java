@@ -47,6 +47,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeoutException;
 
 import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHENTICATION;
+import static org.apache.hive.spark.client.SparkClientUtilities.HIVE_KRYO_REG_NAME;
 
 class SparkClientImpl implements SparkClient {
   private static final long serialVersionUID = 1L;
@@ -499,24 +500,24 @@ class SparkClientImpl implements SparkClient {
           throw new IllegalStateException(msg, e);
         }
       }
-/*
-      String jar1 = "", jar2 = "", jar3 = "";
+
+      StringBuilder jars = new StringBuilder();
       String regStr = conf.get("spark.kryo.registrator");
       if (HIVE_KRYO_REG_NAME.equals(regStr)) {
-        jar1 = SparkClientUtilities.findKryoRegistratorJar(hiveConf);
+        jars.append(SparkClientUtilities.findKryoRegistratorJar(hiveConf));
       }
       if (master.startsWith("mesos")){
-        jar2 = "/opt/hive/lib/hive-exec-3.0.0-SNAPSHOT.jar";
-        jar3 = conf.getOrDefault("spark.hive.executor.jars", "");
+        if(jars.length() > 0)
+          jars.append(",");
+        jars.append("/opt/hive/lib/hive-exec-3.0.0-SNAPSHOT.jar");
+        jars.append(",");
+        jars.append(conf.getOrDefault("spark.hive.executor.jars", ""));
       }
-      String jars = Stream.of(jar1, jar2, jar3)
-                      .filter(s -> s != null && !s.isEmpty())
-                      .collect(joining(","));
       if (jars.length() > 0) {
         argv.add("--jars");
-        argv.add(jars);
+        argv.add(jars.toString());
       }
-*/
+
       argv.add("--class");
       argv.add(RemoteDriver.class.getName());
 
