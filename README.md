@@ -120,7 +120,7 @@ Make sure that `spark.version` is set correctly at [pom file](./pom.xml)
 Here is a quick usage sample (also look at [Hive on Spark getting Started](https://cwiki.apache.org/confluence/display/Hive/Hive+on+Spark%3A+Getting+Started))
 
 * Build Hive using `mvn clean package -Pdist -DskipTests`. The results of the build are at `packaging/target`
-* Make sure that Spark that you are using is build without Hive - `./dev/make-distribution.sh --name spark-without-hive --pip --tgz -Phadoop-2.7 -Pmesos -DskipTests` This build Spark without Hive with Python, but no R 
+* Make sure that Spark that you are using is build without Hive - `./dev/make-distribution.sh --name spark-without-hive --pip --tgz -Pmesos -DskipTests` This build Spark without Hive with Python, but no R 
 * Make sure you can connect remote Spark server. I used the following:
 ````shell
 spark-submit \
@@ -178,13 +178,13 @@ If everything works ok, after executing:
 
 ````
 hive> CREATE TABLE u_data (
-    >   userid INT,
-    >   movieid INT,
-    >   rating INT,
-    >   unixtime STRING)
-    > ROW FORMAT DELIMITED
-    > FIELDS TERMINATED BY '\t'
-    > STORED AS TEXTFILE;
+        userid INT,
+        movieid INT,
+        rating INT,
+        unixtime STRING)
+      ROW FORMAT DELIMITED
+      FIELDS TERMINATED BY '\t'
+      STORED AS TEXTFILE;
 hive> LOAD DATA LOCAL INPATH '../ml-100k/u.data' OVERWRITE INTO TABLE u_data; 
 hive> SELECT COUNT(*) FROM u_data;    
 ````
