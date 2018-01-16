@@ -120,7 +120,12 @@ Make sure that `spark.version` is set correctly at [pom file](./pom.xml)
 Here is a quick usage sample (also look at [Hive on Spark getting Started](https://cwiki.apache.org/confluence/display/Hive/Hive+on+Spark%3A+Getting+Started))
 
 * Build Hive using `mvn clean package -Pdist -DskipTests`. The results of the build are at `packaging/target`
-* Make sure that Spark that you are using is build without Hive - `./dev/make-distribution.sh --name spark-without-hive --pip --tgz -Pmesos -DskipTests` This build Spark without Hive with Python, but no R 
+* Make sure that Spark that you are using is build without Hive - 
+````
+./dev/make-distribution.sh --name spark-without-hive --pip --tgz -Pmesos -Phadoop-2.6 -DskipTests
+```` 
+
+This build Spark without Hive with Python, but no R 
 * Make sure you can connect remote Spark server. I used the following:
 ````shell
 spark-submit \

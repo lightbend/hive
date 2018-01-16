@@ -507,11 +507,12 @@ class SparkClientImpl implements SparkClient {
         jars.append(SparkClientUtilities.findKryoRegistratorJar(hiveConf));
       }
       if (master.startsWith("mesos")){
-        if(jars.length() > 0)
-          jars.append(",");
-        jars.append("/opt/hive/lib/hive-exec-3.0.0-SNAPSHOT.jar");
-        jars.append(",");
-        jars.append(conf.getOrDefault("spark.hive.executor.jars", ""));
+        String extras = conf.getOrDefault("spark.hive.executor.jars", "");
+        if(extras.length() > 0) {
+          if (jars.length() > 0)
+            jars.append(",");
+          jars.append(extras);
+        }
       }
       if (jars.length() > 0) {
         argv.add("--jars");
