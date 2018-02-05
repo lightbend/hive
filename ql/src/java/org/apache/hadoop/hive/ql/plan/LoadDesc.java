@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -35,10 +35,10 @@ public class LoadDesc implements Serializable {
    * Need to remember whether this is an acid compliant operation, and if so whether it is an
    * insert, update, or delete.
    */
-  final AcidUtils.Operation writeType;
+  private final AcidUtils.Operation writeType;
 
 
-  public LoadDesc(final Path sourcePath, AcidUtils.Operation writeType) {
+  LoadDesc(final Path sourcePath, AcidUtils.Operation writeType) {
     this.sourcePath = sourcePath;
     this.writeType = writeType;
   }

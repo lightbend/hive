@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -43,13 +43,17 @@ import org.apache.hadoop.hive.metastore.api.DataOperationType;
 import org.apache.hadoop.hive.metastore.api.hive_metastoreConstants;
 import org.apache.hadoop.hive.metastore.TransactionalValidationListener;
 import org.apache.hadoop.hive.ql.ErrorMsg;
+import org.apache.hadoop.hive.ql.io.orc.OrcFile;
+import org.apache.hadoop.hive.ql.io.orc.OrcInputFormat;
 import org.apache.hadoop.hive.ql.io.orc.OrcRecordUpdater;
+import org.apache.hadoop.hive.ql.io.orc.Reader;
 import org.apache.hadoop.hive.ql.metadata.Table;
 import org.apache.hadoop.hive.ql.plan.CreateTableDesc;
 import org.apache.hadoop.hive.shims.HadoopShims;
 import org.apache.hadoop.hive.shims.HadoopShims.HdfsFileStatusWithId;
 import org.apache.hadoop.hive.shims.ShimLoader;
 import org.apache.hive.common.util.Ref;
+import org.apache.orc.FileFormatException;
 import org.apache.orc.impl.OrcAcidUtils;
 import org.codehaus.jackson.map.ObjectMapper;
 import org.slf4j.Logger;
@@ -124,7 +128,7 @@ public class AcidUtils {
   public static final Pattern   LEGACY_BUCKET_DIGIT_PATTERN = Pattern.compile("^[0-9]{6}");
   /**
    * A write into a non-aicd table produces files like 0000_0 or 0000_0_copy_1
-   * (Unless via Load Data statment)
+   * (Unless via Load Data statement)
    */
   public static final PathFilter originalBucketFilter = new PathFilter() {
     @Override
@@ -353,7 +357,7 @@ public class AcidUtils {
     }
     return result;
   }
-
+  //This is used for (full) Acid tables.  InsertOnly use NOT_ACID
   public enum Operation implements Serializable {
     NOT_ACID, INSERT, UPDATE, DELETE;
   }
@@ -419,6 +423,22 @@ public class AcidUtils {
     }
   }
 
+  /**
+   * Current syntax for creating full acid transactional tables is any one of following 3 ways:
+   * create table T (a int, b int) stored as orc tblproperties('transactional'='true').
+   * create table T (a int, b int) stored as orc tblproperties('transactional'='true',
+   * 'transactional_properties'='default').
+   * create table T (a int, b int) stored as orc tblproperties('transactional'='true',
+   * 'transactional_properties'='split_update').
+   * These are all identical and create a table capable of insert/update/delete/merge operations
+   * with full ACID semantics at Snapshot Isolation.  These tables require ORC input/output format.
+   *
+   * To create a 1/4 acid, aka Micro Managed table:
+   * create table T (a int, b int) stored as orc tblproperties('transactional'='true',
+   * 'transactional_properties'='insert_only').
+   * These tables only support insert operation (also with full ACID semantics at SI).
+   *
+   */
   public static class AcidOperationalProperties {
     private int description = 0x00;
     public static final int SPLIT_UPDATE_BIT = 0x01;
@@ -1047,12 +1067,20 @@ public class AcidUtils {
    * snapshot for this reader.
    * Note that such base is NOT obsolete.  Obsolete files are those that are "covered" by other
    * files within the snapshot.
+   * A base produced by Insert Overwrite is different.  Logically it's a delta file but one that
+   * causes anything written previously is ignored (hence the overwrite).  In this case, base_x
+   * is visible if txnid:x is committed for current reader.
    */
-  private static boolean isValidBase(long baseTxnId, ValidTxnList txnList) {
+  private static boolean isValidBase(long baseTxnId, ValidTxnList txnList, Path baseDir,
+      FileSystem fs) throws IOException {
     if(baseTxnId == Long.MIN_VALUE) {
       //such base is created by 1st compaction in case of non-acid to acid table conversion
       //By definition there are no open txns with id < 1.
       return true;
+    }
+    if(!MetaDataFile.isCompacted(baseDir, fs)) {
+      //this is the IOW case
+      return txnList.isTxnValid(baseTxnId);
     }
     return txnList.isValidBase(baseTxnId);
   }
@@ -1071,12 +1099,12 @@ public class AcidUtils {
         bestBase.oldestBaseTxnId = txn;
       }
       if (bestBase.status == null) {
-        if(isValidBase(txn, txnList)) {
+        if(isValidBase(txn, txnList, p, fs)) {
           bestBase.status = child;
           bestBase.txn = txn;
         }
       } else if (bestBase.txn < txn) {
-        if(isValidBase(txn, txnList)) {
+        if(isValidBase(txn, txnList, p, fs)) {
           obsolete.add(bestBase.status);
           bestBase.status = child;
           bestBase.txn = txn;
@@ -1204,16 +1232,18 @@ public class AcidUtils {
     }
     return resultStr != null && resultStr.equalsIgnoreCase("true");
   }
-
-  public static void setTransactionalTableScan(Map<String, String> parameters, boolean isAcidTable) {
-    parameters.put(ConfVars.HIVE_TRANSACTIONAL_TABLE_SCAN.varname, Boolean.toString(isAcidTable));
+  /**
+   * Means it's a full acid table
+   */
+  public static void setAcidTableScan(Map<String, String> parameters, boolean isAcidTable) {
+    parameters.put(ConfVars.HIVE_ACID_TABLE_SCAN.varname, Boolean.toString(isAcidTable));
   }
 
   /**
    * Means it's a full acid table
    */
-  public static void setTransactionalTableScan(Configuration conf, boolean isFullAcidTable) {
-    HiveConf.setBoolVar(conf, ConfVars.HIVE_TRANSACTIONAL_TABLE_SCAN, isFullAcidTable);
+  public static void setAcidTableScan(Configuration conf, boolean isFullAcidTable) {
+    HiveConf.setBoolVar(conf, ConfVars.HIVE_ACID_TABLE_SCAN, isFullAcidTable);
   }
   /**
    * @param p - not null
@@ -1221,15 +1251,12 @@ public class AcidUtils {
   public static boolean isDeleteDelta(Path p) {
     return p.getName().startsWith(DELETE_DELTA_PREFIX);
   }
-  /** Checks if a table is a valid ACID table.
-   * Note, users are responsible for using the correct TxnManager. We do not look at
-   * SessionState.get().getTxnMgr().supportsAcid() here
-   * @param table table
-   * @return true if table is a legit ACID table, false otherwise
-   * ToDo: this shoudl be renamed isTransactionalTable() since that is what it's checking and covers
-   * both Acid and MM tables. HIVE-18124
+
+  /**
+   * Should produce the same result as
+   * {@link org.apache.hadoop.hive.metastore.txn.TxnUtils#isTransactionalTable(org.apache.hadoop.hive.metastore.api.Table)}
    */
-  public static boolean isAcidTable(Table table) {
+  public static boolean isTransactionalTable(Table table) {
     if (table == null) {
       return false;
     }
@@ -1240,11 +1267,7 @@ public class AcidUtils {
 
     return tableIsTransactional != null && tableIsTransactional.equalsIgnoreCase("true");
   }
-  /**
-   * ToDo: this shoudl be renamed isTransactionalTable() since that is what it's checking and convers
-   * both Acid and MM tables. HIVE-18124
-   */
-  public static boolean isAcidTable(CreateTableDesc table) {
+  public static boolean isTransactionalTable(CreateTableDesc table) {
     if (table == null || table.getTblProps() == null) {
       return false;
     }
@@ -1256,13 +1279,23 @@ public class AcidUtils {
   }
 
   /**
-   * after isTransactionalTable() then make this isAcid() HIVE-18124
+   * Should produce the same result as
+   * {@link org.apache.hadoop.hive.metastore.txn.TxnUtils#isAcidTable(org.apache.hadoop.hive.metastore.api.Table)}
    */
-  public static boolean isFullAcidTable(Table table) {
-    return isAcidTable(table) && !AcidUtils.isInsertOnlyTable(table);
+  public static boolean isAcidTable(Table table) {
+    return isAcidTable(table == null ? null : table.getTTable());
   }
-  
-  public static boolean isFullAcidTable(CreateTableDesc td) {
+  /**
+   * Should produce the same result as
+   * {@link org.apache.hadoop.hive.metastore.txn.TxnUtils#isAcidTable(org.apache.hadoop.hive.metastore.api.Table)}
+   */
+  public static boolean isAcidTable(org.apache.hadoop.hive.metastore.api.Table table) {
+    return table != null && table.getParameters() != null &&
+        isTablePropertyTransactional(table.getParameters()) &&
+        !isInsertOnlyTable(table.getParameters());
+  }
+
+  public static boolean isAcidTable(CreateTableDesc td) {
     if (td == null || td.getTblProps() == null) {
       return false;
     }
@@ -1392,7 +1425,7 @@ public class AcidUtils {
 
 
   /**
-   * Checks if a table is an ACID table that only supports INSERT, but not UPDATE/DELETE
+   * Checks if a table is a transactional table that only supports INSERT, but not UPDATE/DELETE
    * @param params table properties
    * @return true if table is an INSERT_ONLY table, false otherwise
    */
@@ -1400,7 +1433,7 @@ public class AcidUtils {
     return isInsertOnlyTable(params, false);
   }
   public static boolean isInsertOnlyTable(Table table) {
-    return isAcidTable(table) && getAcidOperationalProperties(table).isInsertOnly();
+    return isTransactionalTable(table) && getAcidOperationalProperties(table).isInsertOnly();
   }
 
   // TODO [MM gap]: CTAS may currently be broken. It used to work. See the old code, and why isCtas isn't used?
@@ -1427,11 +1460,16 @@ public class AcidUtils {
     //       in many cases the conversion might be illegal.
     //       The only thing we allow is tx = true w/o tx-props, for backward compat.
     String transactional = props.get(hive_metastoreConstants.TABLE_IS_TRANSACTIONAL);
+    String transactionalProp = props.get(hive_metastoreConstants.TABLE_TRANSACTIONAL_PROPERTIES);
+
+    if (transactional == null && transactionalProp == null) {
+      // Not affected or the op is not about transactional.
+      return null;
+    }
+
     if(transactional == null) {
       transactional = tbl.getParameters().get(hive_metastoreConstants.TABLE_IS_TRANSACTIONAL);
     }
-    String transactionalProp = props.get(hive_metastoreConstants.TABLE_TRANSACTIONAL_PROPERTIES);
-    if (transactional == null && transactionalProp == null) return null; // Not affected.
     boolean isSetToTxn = "true".equalsIgnoreCase(transactional);
     if (transactionalProp == null) {
       if (isSetToTxn) return false; // Assume the full ACID table.
@@ -1454,6 +1492,8 @@ public class AcidUtils {
   }
 
   /**
+   * General facility to place a metadta file into a dir created by acid/compactor write.
+   *
    * Load Data commands against Acid tables write {@link AcidBaseFileType#ORIGINAL_BASE} type files
    * into delta_x_x/ (or base_x in case there is Overwrite clause).  {@link MetaDataFile} is a
    * small JSON file in this directory that indicates that these files don't have Acid metadata
@@ -1469,17 +1509,14 @@ public class AcidUtils {
       String DATA_FORMAT = "dataFormat";
     }
     private interface Value {
-      //plain ORC file
-      String RAW = "raw";
-      //result of acid write, i.e. decorated with ROW__ID info
-      String NATIVE = "native";
+      //written by Major compaction
+      String COMPACTED = "compacted";
     }
 
     /**
      * @param baseOrDeltaDir detla or base dir, must exist
      */
-    public static void createMetaFile(Path baseOrDeltaDir, FileSystem fs, boolean isRawFormat)
-      throws IOException {
+    public static void createCompactorMarker(Path baseOrDeltaDir, FileSystem fs) throws IOException {
       /**
        * create _meta_data json file in baseOrDeltaDir
        * write thisFileVersion, dataFormat
@@ -1489,7 +1526,7 @@ public class AcidUtils {
       Path formatFile = new Path(baseOrDeltaDir, METADATA_FILE);
       Map<String, String> metaData = new HashMap<>();
       metaData.put(Field.VERSION, CURRENT_VERSION);
-      metaData.put(Field.DATA_FORMAT, isRawFormat ? Value.RAW : Value.NATIVE);
+      metaData.put(Field.DATA_FORMAT, Value.COMPACTED);
       try (FSDataOutputStream strm = fs.create(formatFile, false)) {
         new ObjectMapper().writeValue(strm, metaData);
       } catch (IOException ioe) {
@@ -1499,7 +1536,7 @@ public class AcidUtils {
         throw ioe;
       }
     }
-    public static boolean isRawFormat(Path baseOrDeltaDir, FileSystem fs) throws IOException {
+    static boolean isCompacted(Path baseOrDeltaDir, FileSystem fs) throws IOException {
       Path formatFile = new Path(baseOrDeltaDir, METADATA_FILE);
       if(!fs.exists(formatFile)) {
         return false;
@@ -1512,9 +1549,7 @@ public class AcidUtils {
         }
         String dataFormat = metaData.getOrDefault(Field.DATA_FORMAT, "null");
         switch (dataFormat) {
-          case Value.NATIVE:
-            return false;
-          case Value.RAW:
+          case Value.COMPACTED:
             return true;
           default:
             throw new IllegalArgumentException("Unexpected value for " + Field.DATA_FORMAT
@@ -1526,6 +1561,49 @@ public class AcidUtils {
             + ": " + e.getMessage();
         LOG.error(msg, e);
         throw e;
+      }
+    }
+
+    /**
+     * Chooses 1 representantive file from {@code baseOrDeltaDir}
+     * This assumes that all files in the dir are of the same type: either written by an acid
+     * write or Load Data.  This should always be the case for an Acid table.
+     */
+    private static Path chooseFile(Path baseOrDeltaDir, FileSystem fs) throws IOException {
+      if(!(baseOrDeltaDir.getName().startsWith(BASE_PREFIX) ||
+          baseOrDeltaDir.getName().startsWith(DELTA_PREFIX))) {
+        throw new IllegalArgumentException(baseOrDeltaDir + " is not a base/delta");
+      }
+      FileStatus[] dataFiles = fs.listStatus(new Path[] {baseOrDeltaDir}, originalBucketFilter);
+      return dataFiles != null && dataFiles.length > 0 ? dataFiles[0].getPath() : null;
+    }
+
+    /**
+     * Checks if the files in base/delta dir are a result of Load Data statement and thus do not
+     * have ROW_IDs embedded in the data.
+     * @param baseOrDeltaDir base or delta file.
+     */
+    public static boolean isRawFormat(Path baseOrDeltaDir, FileSystem fs) throws IOException {
+      Path dataFile = chooseFile(baseOrDeltaDir, fs);
+      if (dataFile == null) {
+        //directory is empty or doesn't have any that could have been produced by load data
+        return false;
+      }
+      try {
+        Reader reader = OrcFile.createReader(dataFile, OrcFile.readerOptions(fs.getConf()));
+        /*
+          acid file would have schema like <op, otid, writerId, rowid, ctid, <f1, ... fn>> so could
+          check it this way once/if OrcRecordUpdater.ACID_KEY_INDEX_NAME is removed
+          TypeDescription schema = reader.getSchema();
+          List<String> columns = schema.getFieldNames();
+         */
+        return OrcInputFormat.isOriginal(reader);
+      } catch (FileFormatException ex) {
+        //We may be parsing a delta for Insert-only table which may not even be an ORC file so
+        //cannot have ROW_IDs in it.
+        LOG.debug("isRawFormat() called on " + dataFile + " which is not an ORC file: " +
+            ex.getMessage());
+        return true;
       }
     }
   }

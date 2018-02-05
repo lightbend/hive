@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,25 +18,16 @@
 package org.apache.hadoop.hive.ql;
 
 import org.apache.commons.io.FileUtils;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.conf.HiveConf;
-import org.apache.hadoop.hive.metastore.api.StorageDescriptor;
-import org.apache.hadoop.hive.ql.exec.vector.VectorizedRowBatch;
-import org.apache.hadoop.hive.ql.metadata.Hive;
 import org.apache.hadoop.hive.ql.processors.CommandProcessorResponse;
-import org.apache.hadoop.io.NullWritable;
 import org.junit.Assert;
-import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
-import org.junit.rules.TestName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
-import java.io.IOException;
 import java.util.List;
 
 /**
@@ -101,7 +92,7 @@ public class TestTxnLoadData extends TxnCommandsBaseForTests {
     runStatementOnDriver(
       "create table T (a int, b int) stored as orc tblproperties('transactional'='true')");
     //Tstage is just a simple way to generate test data
-    runStatementOnDriver("create table Tstage (a int, b int) stored as orc");
+    runStatementOnDriver("create table Tstage (a int, b int) stored as orc tblproperties('transactional'='false')");
     runStatementOnDriver("insert into Tstage values(1,2),(3,4)");
     //this creates an ORC data file with correct schema under table root
     runStatementOnDriver("export table Tstage to '" + getWarehouseDir() + "/1'");
@@ -169,7 +160,7 @@ public class TestTxnLoadData extends TxnCommandsBaseForTests {
     runStatementOnDriver("create table T (a int, b int) stored as orc tblproperties('transactional'='true')");
     runStatementOnDriver("insert into T values(0,2),(0,4)");
     //Tstage is just a simple way to generate test data
-    runStatementOnDriver("create table Tstage (a int, b int) stored as orc");
+    runStatementOnDriver("create table Tstage (a int, b int) stored as orc tblproperties('transactional'='false')");
     runStatementOnDriver("insert into Tstage values(1,2),(3,4)");
     //this creates an ORC data file with correct schema under table root
     runStatementOnDriver("export table Tstage to '" + getWarehouseDir() +"/1'");
@@ -239,10 +230,10 @@ public class TestTxnLoadData extends TxnCommandsBaseForTests {
   private void loadDataNonAcid2AcidConversion(boolean isVectorized) throws Exception {
     runStatementOnDriver("drop table if exists T");
     runStatementOnDriver("drop table if exists Tstage");
-    runStatementOnDriver("create table T (a int, b int) stored as orc");
+    runStatementOnDriver("create table T (a int, b int) stored as orc tblproperties('transactional'='false')");
     //per acid write to test nonAcid2acid conversion mixed with load data
     runStatementOnDriver("insert into T values(0,2),(0,4)");
-    runStatementOnDriver("create table Tstage (a int, b int) stored as orc");
+    runStatementOnDriver("create table Tstage (a int, b int) stored as orc tblproperties('transactional'='false')");
     runStatementOnDriver("insert into Tstage values(1,2),(3,4)");
     //make 2 more inserts so that we have 000000_0_copy_1, 000000_0_copy_2 files in export
     //export works at file level so if you have copy_N in the table dir, you'll have those in output
@@ -260,7 +251,12 @@ public class TestTxnLoadData extends TxnCommandsBaseForTests {
 
     String testQuery = isVectorized ? "select ROW__ID, a, b from T order by ROW__ID" :
       "select ROW__ID, a, b, INPUT__FILE__NAME from T order by ROW__ID";
-
+/*
+{"transactionid":0,"bucketid":536870912,"rowid":0}     0       2/000000_0
+{"transactionid":0,"bucketid":536870912,"rowid":1}     0       4/000000_0
+{"transactionid":24,"bucketid":536870912,"rowid":0}    4       4/delta_0000024_0000024_0000/000000_0
+{"transactionid":24,"bucketid":536870912,"rowid":1}    5       5/delta_0000024_0000024_0000/000000_0
+*/
     String[][] expected = new String[][] {
       //from pre-acid insert
       {"{\"transactionid\":0,\"bucketid\":536870912,\"rowid\":0}\t0\t2", "t/000000_0"},
@@ -268,10 +264,10 @@ public class TestTxnLoadData extends TxnCommandsBaseForTests {
       //from Load Data into acid converted table
       {"{\"transactionid\":24,\"bucketid\":536870912,\"rowid\":0}\t1\t2", "t/delta_0000024_0000024_0000/000000_0"},
       {"{\"transactionid\":24,\"bucketid\":536870912,\"rowid\":1}\t3\t4", "t/delta_0000024_0000024_0000/000000_0"},
-      {"{\"transactionid\":24,\"bucketid\":536870912,\"rowid\":2}\t2\t2", "t/delta_0000024_0000024_0000/000000_0_copy_1"},
-      {"{\"transactionid\":24,\"bucketid\":536870912,\"rowid\":3}\t3\t3", "t/delta_0000024_0000024_0000/000000_0_copy_1"},
-      {"{\"transactionid\":24,\"bucketid\":536870912,\"rowid\":4}\t4\t4", "t/delta_0000024_0000024_0000/000000_0_copy_2"},
-      {"{\"transactionid\":24,\"bucketid\":536870912,\"rowid\":5}\t5\t5", "t/delta_0000024_0000024_0000/000000_0_copy_2"},
+      {"{\"transactionid\":24,\"bucketid\":536936448,\"rowid\":0}\t2\t2", "t/delta_0000024_0000024_0000/000001_0"},
+      {"{\"transactionid\":24,\"bucketid\":536936448,\"rowid\":1}\t3\t3", "t/delta_0000024_0000024_0000/000001_0"},
+      {"{\"transactionid\":24,\"bucketid\":537001984,\"rowid\":0}\t4\t4", "t/delta_0000024_0000024_0000/000002_0"},
+      {"{\"transactionid\":24,\"bucketid\":537001984,\"rowid\":1}\t5\t5", "t/delta_0000024_0000024_0000/000002_0"},
     };
     checkResult(expected, testQuery, isVectorized, "load data inpath");
 
@@ -285,7 +281,7 @@ public class TestTxnLoadData extends TxnCommandsBaseForTests {
     String[][] expected2 = new String[][] {
       {"{\"transactionid\":30,\"bucketid\":536870912,\"rowid\":0}\t5\t6", "t/base_0000030/000000_0"},
       {"{\"transactionid\":30,\"bucketid\":536870912,\"rowid\":1}\t7\t8", "t/base_0000030/000000_0"},
-      {"{\"transactionid\":30,\"bucketid\":536870912,\"rowid\":2}\t8\t8", "t/base_0000030/000000_0_copy_1"}
+      {"{\"transactionid\":30,\"bucketid\":536936448,\"rowid\":0}\t8\t8", "t/base_0000030/000001_0"}
     };
     checkResult(expected2, testQuery, isVectorized, "load data inpath overwrite");
 
@@ -297,7 +293,7 @@ public class TestTxnLoadData extends TxnCommandsBaseForTests {
     String[][] expected3 = new String[][] {
       {"{\"transactionid\":30,\"bucketid\":536870912,\"rowid\":0}\t5\t6", "t/base_0000033/bucket_00000"},
       {"{\"transactionid\":30,\"bucketid\":536870912,\"rowid\":1}\t7\t8", "t/base_0000033/bucket_00000"},
-      {"{\"transactionid\":30,\"bucketid\":536870912,\"rowid\":2}\t8\t8", "t/base_0000033/bucket_00000"},
+      {"{\"transactionid\":30,\"bucketid\":536936448,\"rowid\":0}\t8\t8", "t/base_0000033/bucket_00001"},
       {"{\"transactionid\":33,\"bucketid\":536870912,\"rowid\":0}\t9\t9", "t/base_0000033/bucket_00000"}
 
     };
@@ -311,7 +307,7 @@ public class TestTxnLoadData extends TxnCommandsBaseForTests {
     runStatementOnDriver("drop table if exists T");
     runStatementOnDriver("drop table if exists Tstage");
     runStatementOnDriver("create table T (a int, b int) partitioned by (p int) stored as orc tblproperties('transactional'='true')");
-    runStatementOnDriver("create table Tstage (a int, b int) stored as orc");
+    runStatementOnDriver("create table Tstage (a int, b int) stored as orc tblproperties('transactional'='false')");
 
     runStatementOnDriver("insert into Tstage values(0,2),(0,4)");
     runStatementOnDriver("export table Tstage to '" + getWarehouseDir() +"/1'");
@@ -365,7 +361,7 @@ public class TestTxnLoadData extends TxnCommandsBaseForTests {
     runStatementOnDriver("create table T (a int, b int) clustered by (a) into 2 buckets stored as orc tblproperties('transactional'='true')");
     File createdFile= folder.newFile("myfile.txt");
     FileUtils.writeStringToFile(createdFile, "hello world");
-    runStatementOnDriver("create table Tstage (a int, b int) stored as orc");
+    runStatementOnDriver("create table Tstage (a int, b int) stored as orc tblproperties('transactional'='false')");
     //this creates an ORC data file with correct schema under table root
     runStatementOnDriver("insert into Tstage values(1,2),(3,4)");
     CommandProcessorResponse cpr = runStatementOnDriverNegative("load data local inpath '" + getWarehouseDir() + "' into table T");
@@ -393,7 +389,7 @@ public class TestTxnLoadData extends TxnCommandsBaseForTests {
     runStatementOnDriver("drop table if exists Tstage");
     runStatementOnDriver("create table T (a int, b int) stored as orc tblproperties('transactional'='true')");
     //Tstage is just a simple way to generate test data
-    runStatementOnDriver("create table Tstage (a int, b int) stored as orc");
+    runStatementOnDriver("create table Tstage (a int, b int) stored as orc tblproperties('transactional'='false')");
     runStatementOnDriver("insert into Tstage values(5,5),(6,6)");
     //this creates an ORC data file with correct schema under table root
     runStatementOnDriver("export table Tstage to '" + getWarehouseDir() + "/1'");
@@ -434,7 +430,7 @@ public class TestTxnLoadData extends TxnCommandsBaseForTests {
     runStatementOnDriver("drop table if exists Tstage");
     runStatementOnDriver("create table T (a int, b int) stored as orc tblproperties('transactional'='true')");
     //Tstage is just a simple way to generate test data
-    runStatementOnDriver("create table Tstage (a int, b int) stored as orc");
+    runStatementOnDriver("create table Tstage (a int, b int) stored as orc tblproperties('transactional'='false')");
     runStatementOnDriver("insert into Tstage values(5,5),(6,6)");
     //this creates an ORC data file with correct schema under table root
     runStatementOnDriver("export table Tstage to '" + getWarehouseDir() + "/1'");

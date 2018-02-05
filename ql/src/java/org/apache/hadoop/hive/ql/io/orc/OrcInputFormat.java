@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -214,7 +214,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
     /*
      * Fallback for the case when OrcSplit flags do not contain hasBase and deltas
      */
-    return HiveConf.getBoolVar(conf, ConfVars.HIVE_TRANSACTIONAL_TABLE_SCAN);
+    return HiveConf.getBoolVar(conf, ConfVars.HIVE_ACID_TABLE_SCAN);
   }
 
   private static class OrcRecordReader
@@ -309,7 +309,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
                                                   long offset, long length
                                                   ) throws IOException {
 
-    boolean isTransactionalTableScan = HiveConf.getBoolVar(conf, ConfVars.HIVE_TRANSACTIONAL_TABLE_SCAN);
+    boolean isTransactionalTableScan = HiveConf.getBoolVar(conf, ConfVars.HIVE_ACID_TABLE_SCAN);
     if (isTransactionalTableScan) {
       raiseAcidTablesMustBeReadWithAcidReaderException(conf);
     }
@@ -506,7 +506,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
                                List<FileStatus> files
                               ) throws IOException {
 
-    if (Utilities.getUseVectorizedInputFileFormat(conf)) {
+    if (Utilities.getIsVectorized(conf)) {
       return new VectorizedOrcInputFormat().validateInput(fs, conf, files);
     }
 
@@ -1692,7 +1692,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
     }
 
     boolean isTransactionalTableScan =
-        HiveConf.getBoolVar(conf, ConfVars.HIVE_TRANSACTIONAL_TABLE_SCAN);
+        HiveConf.getBoolVar(conf, ConfVars.HIVE_ACID_TABLE_SCAN);
     boolean isSchemaEvolution = HiveConf.getBoolVar(conf, ConfVars.HIVE_SCHEMA_EVOLUTION);
     TypeDescription readerSchema =
         OrcInputFormat.getDesiredRowTypeDescr(conf, isTransactionalTableScan, Integer.MAX_VALUE);
@@ -1890,7 +1890,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
   getRecordReader(InputSplit inputSplit, JobConf conf,
                   Reporter reporter) throws IOException {
     //CombineHiveInputFormat may produce FileSplit that is not OrcSplit
-    boolean vectorMode = Utilities.getUseVectorizedInputFileFormat(conf);
+    boolean vectorMode = Utilities.getIsVectorized(conf);
     boolean isAcidRead = isAcidRead(conf, inputSplit);
     if (!isAcidRead) {
       if (vectorMode) {

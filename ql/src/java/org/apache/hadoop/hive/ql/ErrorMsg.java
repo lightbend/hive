@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -29,6 +29,7 @@ import org.antlr.runtime.tree.Tree;
 import org.apache.hadoop.hdfs.protocol.DSQuotaExceededException;
 import org.apache.hadoop.hdfs.protocol.NSQuotaExceededException;
 import org.apache.hadoop.hdfs.protocol.UnresolvedPathException;
+import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.ql.parse.ASTNode;
 import org.apache.hadoop.hive.ql.parse.ASTNodeOrigin;
 import org.apache.hadoop.hive.ql.plan.AlterTableDesc.AlterTableTypes;
@@ -113,15 +114,12 @@ public enum ErrorMsg {
   CLUSTERBY_ORDERBY_CONFLICT(10050, "Cannot have both CLUSTER BY and ORDER BY clauses"),
   NO_LIMIT_WITH_ORDERBY(10051, "In strict mode, if ORDER BY is specified, "
       + "LIMIT must also be specified"),
-  NO_CARTESIAN_PRODUCT(10052, "In strict mode, cartesian product is not allowed. "
-      + "If you really want to perform the operation, set hive.mapred.mode=nonstrict"),
   UNION_NOTIN_SUBQ(10053, "Top level UNION is not supported currently; "
       + "use a subquery for the UNION"),
   INVALID_INPUT_FORMAT_TYPE(10054, "Input format must implement InputFormat"),
   INVALID_OUTPUT_FORMAT_TYPE(10055, "Output Format must implement HiveOutputFormat, "
       + "otherwise it should be either IgnoreKeyTextOutputFormat or SequenceFileOutputFormat"),
-  NO_VALID_PARTN(10056, "The query does not reference any valid partition. "
-      + "To run this query, set hive.mapred.mode=nonstrict"),
+  NO_VALID_PARTN(10056, HiveConf.StrictChecks.NO_PARTITIONLESS_MSG),
   NO_OUTER_MAPJOIN(10057, "MAPJOIN cannot be performed with OUTER JOIN"),
   INVALID_MAPJOIN_HINT(10058, "All tables are specified as map-table for join"),
   INVALID_MAPJOIN_TABLE(10059, "Result of a union cannot be a map table"),
@@ -205,12 +203,6 @@ public enum ErrorMsg {
   INCOMPATIBLE_SCHEMA(10120, "The existing table is not compatible with the import spec. "),
   EXIM_FOR_NON_NATIVE(10121, "Export/Import cannot be done for a non-native table. "),
   INSERT_INTO_BUCKETIZED_TABLE(10122, "Bucketized tables do not support INSERT INTO:"),
-  NO_COMPARE_BIGINT_STRING(10123, "In strict mode, comparing bigints and strings is not allowed, "
-      + "it may result in a loss of precision. "
-      + "If you really want to perform the operation, set hive.mapred.mode=nonstrict"),
-  NO_COMPARE_BIGINT_DOUBLE(10124, "In strict mode, comparing bigints and doubles is not allowed, "
-      + "it may result in a loss of precision. "
-      + "If you really want to perform the operation, set hive.mapred.mode=nonstrict"),
   PARTSPEC_DIFFER_FROM_SCHEMA(10125, "Partition columns in partition specification are "
       + "not the same as that defined in the table schema. "
       + "The names and orders have to be exactly the same."),
@@ -464,7 +456,9 @@ public enum ErrorMsg {
   HIVE_GROUPING_FUNCTION_EXPR_NOT_IN_GROUPBY(10409, "Expression in GROUPING function not present in GROUP BY"),
   ALTER_TABLE_NON_PARTITIONED_TABLE_CASCADE_NOT_SUPPORTED(10410,
       "Alter table with non-partitioned table does not support cascade"),
+
   //========================== 20000 range starts here ========================//
+
   SCRIPT_INIT_ERROR(20000, "Unable to initialize custom script."),
   SCRIPT_IO_ERROR(20001, "An error occurred while reading or writing to your custom script. "
       + "It may have crashed with an error."),
@@ -492,10 +486,15 @@ public enum ErrorMsg {
   FILE_NOT_FOUND(20012, "File not found: {0}", "64000", true),
   WRONG_FILE_FORMAT(20013, "Wrong file format. Please check the file's format.", "64000", true),
 
+  SPARK_CREATE_CLIENT_INVALID_QUEUE(20014, "Spark job is submitted to an invalid queue: {0}."
+      + " Please fix and try again.", true),
+  SPARK_RUNTIME_OOM(20015, "Spark job failed because of out of memory."),
+
   // An exception from runtime that will show the full stack to client
   UNRESOLVED_RT_EXCEPTION(29999, "Runtime Error: {0}", "58004", true),
 
   //========================== 30000 range starts here ========================//
+
   STATSPUBLISHER_NOT_OBTAINED(30000, "StatsPublisher cannot be obtained. " +
     "There was a error to retrieve the StatsPublisher, and retrying " +
     "might help. If you dont want the query to fail because accurate statistics " +
@@ -530,11 +529,7 @@ public enum ErrorMsg {
   STATSAGGREGATOR_SOURCETASK_NULL(30014, "SourceTask of StatsTask should not be null"),
   STATSAGGREGATOR_CONNECTION_ERROR(30015,
       "Stats aggregator of type {0} cannot be connected to", true),
-  STATSAGGREGATOR_MISSED_SOMESTATS(30016,
-      "Stats type {0} is missing from stats aggregator. If you don't want the query " +
-      "to fail because of this, set hive.stats.atomic=false", true),
   STATS_SKIPPING_BY_ERROR(30017, "Skipping stats aggregation by error {0}", true),
-
 
   INVALID_FILE_FORMAT_IN_LOAD(30019, "The file that you are trying to load does not match the" +
       " file format of the destination table."),
@@ -555,7 +550,37 @@ public enum ErrorMsg {
   CONCATENATE_UNSUPPORTED_PARTITION_ARCHIVED(30032, "Concatenate/Merge can not be performed on archived partitions"),
   CONCATENATE_UNSUPPORTED_TABLE_NON_NATIVE(30033, "Concatenate/Merge can not be performed on non-native tables"),
   CONCATENATE_UNSUPPORTED_TABLE_NOT_MANAGED(30034, "Concatenate/Merge can only be performed on managed tables"),
-  CONCATENATE_UNSUPPORTED_TABLE_TRANSACTIONAL(30035, "Concatenate/Merge can not be performed on transactional tables")
+  CONCATENATE_UNSUPPORTED_TABLE_TRANSACTIONAL(30035,
+      "Concatenate/Merge can not be performed on transactional tables"),
+
+  SPARK_GET_JOB_INFO_TIMEOUT(30036,
+      "Spark job timed out after {0} seconds while getting job info", true),
+  SPARK_JOB_MONITOR_TIMEOUT(30037, "Job hasn't been submitted after {0}s." +
+      " Aborting it.\nPossible reasons include network issues, " +
+      "errors in remote driver or the cluster has no available resources, etc.\n" +
+      "Please check YARN or Spark driver's logs for further information.\n" +
+      "The timeout is controlled by " + HiveConf.ConfVars.SPARK_JOB_MONITOR_TIMEOUT + ".", true),
+
+  // Various errors when creating Spark client
+  SPARK_CREATE_CLIENT_TIMEOUT(30038,
+      "Timed out while creating Spark client for session {0}.", true),
+  SPARK_CREATE_CLIENT_QUEUE_FULL(30039,
+      "Failed to create Spark client because job queue is full: {0}.", true),
+  SPARK_CREATE_CLIENT_INTERRUPTED(30040,
+      "Interrupted while creating Spark client for session {0}", true),
+  SPARK_CREATE_CLIENT_ERROR(30041,
+      "Failed to create Spark client for Spark session {0}", true),
+  SPARK_CREATE_CLIENT_INVALID_RESOURCE_REQUEST(30042,
+      "Failed to create Spark client due to invalid resource request: {0}", true),
+  SPARK_CREATE_CLIENT_CLOSED_SESSION(30043,
+      "Cannot create Spark client on a closed session {0}", true),
+
+  SPARK_JOB_INTERRUPTED(30044, "Spark job was interrupted while executing"),
+
+  //========================== 40000 range starts here ========================//
+
+  SPARK_JOB_RUNTIME_ERROR(40001,
+      "Spark job failed during runtime. Please check stacktrace for the root cause.")
   ;
 
   private int errorCode;

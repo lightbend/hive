@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -65,7 +65,7 @@ class QueryLifeTimeHookRunner {
     List<QueryLifeTimeHook> propertyDefinedHoooks;
     try {
       propertyDefinedHoooks = hooksLoader.getHooks(
-              HiveConf.ConfVars.HIVE_QUERY_LIFETIME_HOOKS, console);
+          HiveConf.ConfVars.HIVE_QUERY_LIFETIME_HOOKS, console, QueryLifeTimeHook.class);
     } catch (IllegalAccessException | InstantiationException | ClassNotFoundException e) {
       throw new IllegalArgumentException(e);
     }

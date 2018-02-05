@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -17,11 +17,14 @@
  */
 package org.apache.hadoop.hive.ql;
 
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.metastore.IMetaStoreClient;
 import org.apache.hadoop.hive.metastore.api.ColumnStatisticsObj;
 import org.apache.hadoop.hive.metastore.api.ShowCompactRequest;
 import org.apache.hadoop.hive.metastore.api.ShowCompactResponse;
+import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
 import org.apache.hadoop.hive.metastore.txn.TxnStore;
 import org.apache.hadoop.hive.metastore.txn.TxnUtils;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
@@ -30,6 +33,7 @@ import org.apache.hadoop.hive.ql.metadata.Hive;
 import org.apache.hadoop.hive.ql.processors.CommandProcessorResponse;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TestName;
@@ -67,7 +71,7 @@ public class TestTxnNoBuckets extends TxnCommandsBaseForTests {
     int[][] sourceVals1 = {{0,0,0},{3,3,3}};
     int[][] sourceVals2 = {{1,1,1},{2,2,2}};
     runStatementOnDriver("drop table if exists tmp");
-    runStatementOnDriver("create table tmp (c1 integer, c2 integer, c3 integer) stored as orc");
+    runStatementOnDriver("create table tmp (c1 integer, c2 integer, c3 integer) stored as orc tblproperties('transactional'='false')");
     runStatementOnDriver("insert into tmp " + makeValuesClause(sourceVals1));
     runStatementOnDriver("insert into tmp " + makeValuesClause(sourceVals2));
     runStatementOnDriver("drop table if exists nobuckets");
@@ -174,6 +178,7 @@ public class TestTxnNoBuckets extends TxnCommandsBaseForTests {
    */
   @Test
   public void testCTAS() throws Exception {
+    runStatementOnDriver("drop table if exists myctas");
     int[][] values = {{1,2},{3,4}};
     runStatementOnDriver("insert into " + Table.NONACIDORCTBL +  makeValuesClause(values));
     runStatementOnDriver("create table myctas stored as ORC TBLPROPERTIES ('transactional" +
@@ -187,7 +192,7 @@ public class TestTxnNoBuckets extends TxnCommandsBaseForTests {
 
     runStatementOnDriver("insert into " + Table.ACIDTBL + makeValuesClause(values));
     runStatementOnDriver("create table myctas2 stored as ORC TBLPROPERTIES ('transactional" +
-      "'='true', 'transactional_properties'='default') as select a, b from " + Table.ACIDTBL);
+      "'='true', 'transactional_properties'='default') as select a, b from " + Table.ACIDTBL);//todo: try this with acid default - it seem makeing table acid in listener is too late
     rs = runStatementOnDriver("select ROW__ID, a, b, INPUT__FILE__NAME from myctas2 order by ROW__ID");
     String expected2[][] = {
       {"{\"transactionid\":17,\"bucketid\":536870912,\"rowid\":0}\t3\t4", "warehouse/myctas2/delta_0000017_0000017_0000/bucket_00000"},
@@ -217,6 +222,16 @@ public class TestTxnNoBuckets extends TxnCommandsBaseForTests {
     };
     checkExpected(rs, expected4, "Unexpected row count after ctas from union distinct query");
   }
+  @Test
+  public void testCtasEmpty() throws Exception {
+    MetastoreConf.setBoolVar(hiveConf, MetastoreConf.ConfVars.CREATE_TABLES_AS_ACID, true);
+    runStatementOnDriver("drop table if exists myctas");
+    runStatementOnDriver("create table myctas stored as ORC as" +
+        " select a, b from " + Table.NONACIDORCTBL);
+    List<String> rs = runStatementOnDriver("select ROW__ID, a, b, INPUT__FILE__NAME" +
+        " from myctas order by ROW__ID");
+  }
+
   /**
    * Insert into unbucketed acid table from union all query
    * Union All is flattend so nested subdirs are created and acid move drops them since
@@ -531,7 +546,7 @@ ekoifman:apache-hive-3.0.0-SNAPSHOT-bin ekoifman$ tree /Users/ekoifman/dev/hiver
     //this enables vectorization of ROW__ID
     hiveConf.setBoolVar(HiveConf.ConfVars.HIVE_VECTORIZATION_ROW_IDENTIFIER_ENABLED, true);//HIVE-12631
     runStatementOnDriver("drop table if exists T");
-    runStatementOnDriver("create table T(a int, b int) stored as orc");
+    runStatementOnDriver("create table T(a int, b int) stored as orc tblproperties('transactional'='false')");
     int[][] values = {{1,2},{2,4},{5,6},{6,8},{9,10}};
     runStatementOnDriver("insert into T(a, b) " + makeValuesClause(values));
     //, 'transactional_properties'='default'
@@ -695,6 +710,65 @@ ekoifman:apache-hive-3.0.0-SNAPSHOT-bin ekoifman$ tree /Users/ekoifman/dev/hiver
     //now check that stats were updated
     map = hms.getPartitionColumnStatistics("default","T", partNames, colNames);
     Assert.assertEquals("", 5, map.get(partNames.get(0)).get(0).getStatsData().getLongStats().getHighValue());
+  }
+  @Test
+  public void testDefault() throws Exception {
+    hiveConf.set(MetastoreConf.ConfVars.CREATE_TABLES_AS_ACID.getVarname(), "true");
+    runStatementOnDriver("drop table if exists T");
+    runStatementOnDriver("create table T (a int, b int) stored as orc");
+    runStatementOnDriver("insert into T values(1,2),(3,4)");
+    String query = "select ROW__ID, a, b, INPUT__FILE__NAME from T order by a, b";
+    List<String> rs = runStatementOnDriver(query);
+    String[][] expected = {
+      //this proves data is written in Acid layout so T was made Acid
+      {"{\"transactionid\":15,\"bucketid\":536870912,\"rowid\":0}\t1\t2", "t/delta_0000015_0000015_0000/bucket_00000"},
+      {"{\"transactionid\":15,\"bucketid\":536870912,\"rowid\":1}\t3\t4", "t/delta_0000015_0000015_0000/bucket_00000"}
+    };
+    checkExpected(rs, expected, "insert data");
+  }
+  /**
+   * see HIVE-18429
+   */
+  @Test
+  public void testEmptyCompactionResult() throws Exception {
+    hiveConf.set(MetastoreConf.ConfVars.CREATE_TABLES_AS_ACID.getVarname(), "true");
+    runStatementOnDriver("drop table if exists T");
+    runStatementOnDriver("create table T (a int, b int) stored as orc");
+    int[][] data = {{1,2}, {3,4}};
+    runStatementOnDriver("insert into T" + makeValuesClause(data));
+    runStatementOnDriver("insert into T" + makeValuesClause(data));
+
+    //delete the bucket files so now we have empty delta dirs
+    List<String> rs = runStatementOnDriver("select distinct INPUT__FILE__NAME from T");
+    FileSystem fs = FileSystem.get(hiveConf);
+    for(String path : rs) {
+      fs.delete(new Path(path), true);
+    }
+    runStatementOnDriver("alter table T compact 'major'");
+    TestTxnCommands2.runWorker(hiveConf);
+
+    //check status of compaction job
+    TxnStore txnHandler = TxnUtils.getTxnStore(hiveConf);
+    ShowCompactResponse resp = txnHandler.showCompact(new ShowCompactRequest());
+    Assert.assertEquals("Unexpected number of compactions in history", 1, resp.getCompactsSize());
+    Assert.assertEquals("Unexpected 0 compaction state", TxnStore.CLEANING_RESPONSE, resp.getCompacts().get(0).getState());
+    Assert.assertTrue(resp.getCompacts().get(0).getHadoopJobId().startsWith("job_local"));
+
+    //now run another compaction make sure empty dirs don't cause issues
+    runStatementOnDriver("insert into T" + makeValuesClause(data));
+    runStatementOnDriver("alter table T compact 'major'");
+    TestTxnCommands2.runWorker(hiveConf);
+
+    //check status of compaction job
+    resp = txnHandler.showCompact(new ShowCompactRequest());
+    Assert.assertEquals("Unexpected number of compactions in history", 2, resp.getCompactsSize());
+    for(int i = 0; i < 2; i++) {
+      Assert.assertEquals("Unexpected 0 compaction state", TxnStore.CLEANING_RESPONSE, resp.getCompacts().get(i).getState());
+      Assert.assertTrue(resp.getCompacts().get(i).getHadoopJobId().startsWith("job_local"));
+    }
+    rs = runStatementOnDriver("select a, b from T order by a, b");
+    Assert.assertEquals(stringifyValues(data), rs);
+
   }
 }
 

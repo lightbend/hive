@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -159,14 +159,6 @@ public class LoadSemanticAnalyzer extends BaseSemanticAnalyzer {
           throw new SemanticException(ErrorMsg.INVALID_PATH.getMsg(ast,
               "source contains directory: " + oneSrc.getPath().toString()));
         }
-        if(AcidUtils.isFullAcidTable(table)) {
-          if(!AcidUtils.originalBucketFilter.accept(oneSrc.getPath())) {
-            //acid files (e.g. bucket_0000) have ROW_ID embedded in them and so can't be simply
-            //copied to a table so only allow non-acid files for now
-            throw new SemanticException(ErrorMsg.ACID_LOAD_DATA_INVALID_FILE_NAME,
-              oneSrc.getPath().getName(), table.getDbName() + "." + table.getTableName());
-          }
-        }
       }
     } catch (IOException e) {
       // Has to use full name to make sure it does not conflict with
@@ -283,7 +275,7 @@ public class LoadSemanticAnalyzer extends BaseSemanticAnalyzer {
 
     Long txnId = null;
     int stmtId = -1;
-    if (AcidUtils.isAcidTable(ts.tableHandle)) {
+    if (AcidUtils.isTransactionalTable(ts.tableHandle)) {
       txnId = SessionState.get().getTxnMgr().getCurrentTxnId();
       stmtId = SessionState.get().getTxnMgr().getWriteIdAndIncrement();
     }

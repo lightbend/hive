@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -57,6 +57,7 @@ import org.apache.hadoop.hive.cli.OptionsProcessor;
 import org.apache.hadoop.hive.common.HiveInterruptUtils;
 import org.apache.hadoop.hive.common.LogUtils;
 import org.apache.hadoop.hive.common.LogUtils.LogInitializationException;
+import org.apache.hadoop.hive.common.cli.EscapeCRLFHelper;
 import org.apache.hadoop.hive.common.cli.ShellCmdExecutor;
 import org.apache.hadoop.hive.common.io.CachingPrintStream;
 import org.apache.hadoop.hive.common.io.FetchConverter;
@@ -67,11 +68,12 @@ import org.apache.hadoop.hive.conf.VariableSubstitution;
 import org.apache.hadoop.hive.conf.HiveConf.ConfVars;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.ql.CommandNeedRetryException;
-import org.apache.hadoop.hive.ql.Driver;
+import org.apache.hadoop.hive.ql.IDriver;
 import org.apache.hadoop.hive.ql.QueryPlan;
 import org.apache.hadoop.hive.ql.exec.FunctionRegistry;
 import org.apache.hadoop.hive.ql.exec.mr.HadoopJobExecHelper;
 import org.apache.hadoop.hive.ql.exec.tez.TezJobExecHelper;
+import org.apache.hadoop.hive.ql.metadata.HiveMaterializedViewsRegistry;
 import org.apache.hadoop.hive.ql.parse.HiveParser;
 import org.apache.hadoop.hive.ql.processors.CommandProcessor;
 import org.apache.hadoop.hive.ql.processors.CommandProcessorFactory;
@@ -182,7 +184,7 @@ public class CliDriver {
     }  else { // local mode
       try {
         CommandProcessor proc = CommandProcessorFactory.get(tokens, (HiveConf) conf);
-        if (proc instanceof Driver) {
+        if (proc instanceof IDriver) {
           // Let Driver strip comments using sql parser
           ret = processLocalCmd(cmd, proc, ss);
         } else {
@@ -221,14 +223,15 @@ public class CliDriver {
   int processLocalCmd(String cmd, CommandProcessor proc, CliSessionState ss) {
     int tryCount = 0;
     boolean needRetry;
+    boolean escapeCRLF = HiveConf.getBoolVar(conf, HiveConf.ConfVars.HIVE_CLI_PRINT_ESCAPE_CRLF);
     int ret = 0;
 
     do {
       try {
         needRetry = false;
         if (proc != null) {
-          if (proc instanceof Driver) {
-            Driver qp = (Driver) proc;
+          if (proc instanceof IDriver) {
+            IDriver qp = (IDriver) proc;
             PrintStream out = ss.out;
             long start = System.currentTimeMillis();
             if (ss.getIsVerbose()) {
@@ -258,6 +261,9 @@ public class CliDriver {
               }
               while (qp.getResults(res)) {
                 for (String r : res) {
+                  if (escapeCRLF) {
+                    r = EscapeCRLFHelper.escapeCRLF(r);
+                  }
                   out.println(r);
                 }
                 counter += res.size();
@@ -321,7 +327,7 @@ public class CliDriver {
    * @param qp Driver that executed the command
    * @param out PrintStream which to send output to
    */
-  private void printHeader(Driver qp, PrintStream out) {
+  private void printHeader(IDriver qp, PrintStream out) {
     List<FieldSchema> fieldSchemas = qp.getSchema().getFieldSchemas();
     if (HiveConf.getBoolVar(conf, HiveConf.ConfVars.HIVE_CLI_PRINT_HEADER)
           && fieldSchemas != null) {
@@ -759,6 +765,9 @@ public class CliDriver {
     }
 
     ss.updateThreadName();
+
+    // Create views registry
+    HiveMaterializedViewsRegistry.get().init();
 
     // execute cli driver work
     try {
