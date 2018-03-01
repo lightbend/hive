@@ -114,8 +114,8 @@ What is special about this version
 
 This version of Hive has modified `org.apache.hive.spark.client.SparkClientImpl` in `spark-client` module. Modifications are numerous (compare to the [original](https://github.com/apache/hive/blob/master/spark-client/src/main/java/org/apache/hive/spark/client/SparkClientImpl.java)).
 
-These changes enable the usage of Spark server running on Mesos.
-Make sure that `spark.version` is set correctly at [pom file](./pom.xml)
+These changes enable the usage of Spark on Mesos as the execution engine for Hive.
+Make sure that `spark.version` is set correctly at [pom file](./pom.xml).
 
 Here is a quick usage sample (also look at [Hive on Spark getting Started](https://cwiki.apache.org/confluence/display/Hive/Hive+on+Spark%3A+Getting+Started))
 
@@ -123,15 +123,15 @@ Here is a quick usage sample (also look at [Hive on Spark getting Started](https
 * Make sure that Spark that you are using is build without Hive - 
 ````
 ./dev/make-distribution.sh --name spark-without-hive --pip --tgz -Pmesos -Phadoop-2.6 -DskipTests
-```` 
+````
 
-This build Spark without Hive with Python, but no R 
-* Make sure you can connect remote Spark server. I used the following:
+This version of Spark is built without Hive and R. 
+* Make sure you can successfully run a Spark job by running:
 ````shell
 spark-submit \
-	--master mesos://spark-for-hive.marathon.mesos:15457  \
+	--master mesos://spark.marathon.mesos:<port-of-DC/OS-spark-instance>  \
 	--deploy-mode cluster  \
-	--conf spark.mesos.executor.docker.image=lightbend/fdp-spark-for-hive:latest  \
+	--conf spark.mesos.executor.docker.image=lightbend/fdp-spark-for-hive:2.2.1  \
 	--conf spark.mesos.driver.labels=DCOS_SPACE:/spark  \
 	--conf spark.mesos.task.labels=DCOS_SPACE:/spark  \
 	--conf spark.executor.cores=2  \
@@ -142,30 +142,31 @@ spark-submit \
 ````
 Make sure to set the port correctly
 * Copy `hive-site.xml` from `conf` directory to the `conf` directory of created distribution. Make sure to update
-```
-  <property>
+```xml
+<property>
     <name>spark.master</name>
-    <value>mesos://spark-for-hive.marathon.mesos:15457</value>
+    <value>mesos://spark.marathon.mesos:port-of-DCOS-spark-instance</value>
     <description>Spark Master URL.</description>
+</property>
 ```
 and
-````
-  <property>
+````xml
+<property>
     <name>spark.hive.jar.location</name>
     <value>http://hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar</value>
     <description>URL accessable Hive jar</description>
-  </property>
+</property>
 ````
 with the locations that you need and any other parameters.
 * Copy the folowing jars to the `lib` directory from your corresponding Spark - 
   `scala-library`, `spark-core` and `spark-network-common` 
 * Make sure to set Hadoop and Spark home (yes you need local spark to use Spark-submit) using the following:
-````
+````bash
 export HADOOP_HOME=...
 export SPARK_HOME=..
 ````
 * If this is the first Hive usage, create database (I am using Derby)
-````
+````bash
 ./bin/schematool -dbType derby -initSchema
 ````
 and HDFS directories required for Hive 
@@ -229,5 +230,3 @@ Hive is not completed. This means two things:
 * First request to Spark is significantly slower compared to subsequent requests
 * When deciding on the size of the cluster, make sure you create large enough
   cluster for any Hive operation.
-
-

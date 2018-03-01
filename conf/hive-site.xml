@@ -5390,7 +5390,7 @@
   </property>
   <property>
     <name>spark.docker.image</name>
-    <value>lightbend/fdp-spark-for-hive:2.0.0</value>
+    <value>lightbend/fdp-spark-for-hive:2.2.1</value>
     <description>Spark docker image to use</description>
   </property>
   <property>
