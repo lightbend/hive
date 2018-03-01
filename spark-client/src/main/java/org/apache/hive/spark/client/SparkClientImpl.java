@@ -24,6 +24,27 @@ import com.google.common.io.Resources;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.util.concurrent.GenericFutureListener;
 import io.netty.util.concurrent.Promise;
+
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.PrintStream;
+import java.io.Serializable;
+import java.io.Writer;
+import java.net.URI;
+import java.net.URL;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.UUID;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeoutException;
+
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.hive.common.log.LogRedirector;
 import org.apache.hadoop.hive.conf.Constants;
@@ -38,13 +59,6 @@ import org.apache.spark.SparkContext;
 import org.apache.spark.SparkException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.io.*;
-import java.net.URI;
-import java.net.URL;
-import java.util.*;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeoutException;
 
 import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHENTICATION;
 import static org.apache.hive.spark.client.SparkClientUtilities.HIVE_KRYO_REG_NAME;
@@ -73,7 +87,7 @@ class SparkClientImpl implements SparkClient {
   private volatile boolean isAlive;
 
   SparkClientImpl(RpcServer rpcServer, Map<String, String> conf, HiveConf hiveConf,
-                  String sessionid) throws IOException, SparkException {
+                  String sessionid) throws IOException {
     this.conf = conf;
     this.hiveConf = hiveConf;
     this.jobs = Maps.newConcurrentMap();
@@ -497,7 +511,7 @@ class SparkClientImpl implements SparkClient {
     argv.add(RemoteDriver.class.getName());
 
     if (master.startsWith("mesos")){
-      argv.add(conf.getOrDefault("spark.hive.jar.location", "http://fdp-hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar"));
+      argv.add(conf.getOrDefault("spark.hive.jar.location", "http://hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar"));
     }
     else {
       String jar = "spark-internal";
@@ -652,7 +666,7 @@ class SparkClientImpl implements SparkClient {
     }
 
     private void handle(ChannelHandlerContext ctx, Error msg) {
-      LOG.warn("Error reported from remote driver.", msg.cause);
+      LOG.warn("Error reported from remote driver: {}", msg.cause);
     }
 
     private void handle(ChannelHandlerContext ctx, JobMetrics msg) {
@@ -698,7 +712,6 @@ class SparkClientImpl implements SparkClient {
         LOG.warn("Received spark job ID: {} for unknown job {}", msg.sparkJobId, msg.clientJobId);
       }
     }
-
   }
 
   private static class AddJarJob implements Job<Serializable> {

@@ -138,7 +138,7 @@ spark-submit \
 	--conf spark.executor.memory=2g  \
 	--conf driver.memory=2g  \
 	--conf spark.cores.max=8  \
-	--class org.apache.spark.examples.SparkPi  http://fdp-hive-on-spark.marathon.mesos/spark-examples_2.11-2.2.0.jar  1000  
+	--class org.apache.spark.examples.SparkPi  http://hive-on-spark.marathon.mesos/spark-examples_2.11-2.2.0.jar  1000  
 ````
 Make sure to set the port correctly
 * Copy `hive-site.xml` from `conf` directory to the `conf` directory of created distribution. Make sure to update
@@ -152,7 +152,7 @@ and
 ````
   <property>
     <name>spark.hive.jar.location</name>
-    <value>http://fdp-hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar</value>
+    <value>http://hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar</value>
     <description>URL accessable Hive jar</description>
   </property>
 ````

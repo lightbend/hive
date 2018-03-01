@@ -1124,6 +1124,11 @@ public class ObjectStore implements RawStore, Configurable {
       MTable mtbl = convertToMTable(tbl);
       pm.makePersistent(mtbl);
 
+      if (tbl.getCreationMetadata() != null) {
+        MCreationMetadata mcm = convertToMCreationMetadata(tbl.getCreationMetadata());
+        pm.makePersistent(mcm);
+      }
+
       PrincipalPrivilegeSet principalPrivs = tbl.getPrivileges();
       List<Object> toPersistPrivObjs = new ArrayList<>();
       if (principalPrivs != null) {
@@ -1147,7 +1152,8 @@ public class ObjectStore implements RawStore, Configurable {
         if (MetaStoreUtils.isMaterializedViewTable(tbl)) {
           // Add to the invalidation cache
           MaterializationsInvalidationCache.get().createMaterializedView(
-              tbl, tbl.getCreationMetadata().getTablesUsed());
+              tbl.getDbName(), tbl.getTableName(), tbl.getCreationMetadata().getTablesUsed(),
+              tbl.getCreationMetadata().getValidTxnList());
         }
       }
     }
@@ -1234,11 +1240,9 @@ public class ObjectStore implements RawStore, Configurable {
 
         preDropStorageDescriptor(tbl.getSd());
 
-        if (tbl.getCreationMetadata() != null) {
-          // Remove creation metadata
-          MCreationMetadata mcm = tbl.getCreationMetadata();
-          tbl.setCreationMetadata(null);
-          pm.deletePersistent(mcm);
+        if (materializedView) {
+          dropCreationMetadata(
+              tbl.getDatabase().getName(), tbl.getTableName());
         }
 
         // then remove the table
@@ -1252,6 +1256,25 @@ public class ObjectStore implements RawStore, Configurable {
         if (materializedView) {
           MaterializationsInvalidationCache.get().dropMaterializedView(dbName, tableName);
         }
+      }
+    }
+    return success;
+  }
+
+  private boolean dropCreationMetadata(String dbName, String tableName) throws MetaException,
+      NoSuchObjectException, InvalidObjectException, InvalidInputException {
+    boolean success = false;
+    try {
+      openTransaction();
+      MCreationMetadata mcm = getCreationMetadata(dbName, tableName);
+      pm.retrieve(mcm);
+      if (mcm != null) {
+        pm.deletePersistentAll(mcm);
+      }
+      success = commitTransaction();
+    } finally {
+      if (!success) {
+        rollbackTransaction();
       }
     }
     return success;
@@ -1309,6 +1332,11 @@ public class ObjectStore implements RawStore, Configurable {
     try {
       openTransaction();
       tbl = convertToTable(getMTable(dbName, tableName));
+      // Retrieve creation metadata if needed
+      if (tbl != null && TableType.MATERIALIZED_VIEW.toString().equals(tbl.getTableType())) {
+        tbl.setCreationMetadata(
+            convertToCreationMetadata(getCreationMetadata(dbName, tableName)));
+      }
       commited = commitTransaction();
     } finally {
       if (!commited) {
@@ -1557,11 +1585,6 @@ public class ObjectStore implements RawStore, Configurable {
         pm.retrieveAll(mtbl.getSd().getCD());
         nmtbl.mcd = mtbl.getSd().getCD();
       }
-      // Retrieve creation metadata if needed
-      if (mtbl != null &&
-          TableType.MATERIALIZED_VIEW.toString().equals(mtbl.getTableType())) {
-        mtbl.setCreationMetadata(getCreationMetadata(db, table));
-      }
       commited = commitTransaction();
     } finally {
       rollbackAndCleanup(commited, query);
@@ -1665,7 +1688,6 @@ public class ObjectStore implements RawStore, Configurable {
         .getRetention(), convertToStorageDescriptor(mtbl.getSd()),
         convertToFieldSchemas(mtbl.getPartitionKeys()), convertMap(mtbl.getParameters()),
         mtbl.getViewOriginalText(), mtbl.getViewExpandedText(), tableType);
-    t.setCreationMetadata(convertToCreationMetadata(mtbl.getCreationMetadata()));
     t.setRewriteEnabled(mtbl.isRewriteEnabled());
     return t;
   }
@@ -1705,7 +1727,7 @@ public class ObjectStore implements RawStore, Configurable {
         .getCreateTime(), tbl.getLastAccessTime(), tbl.getRetention(),
         convertToMFieldSchemas(tbl.getPartitionKeys()), tbl.getParameters(),
         tbl.getViewOriginalText(), tbl.getViewExpandedText(), tbl.isRewriteEnabled(),
-        convertToMCreationMetadata(tbl.getCreationMetadata()), tableType);
+        tableType);
   }
 
   private List<MFieldSchema> convertToMFieldSchemas(List<FieldSchema> keys) {
@@ -2741,6 +2763,9 @@ public class ObjectStore implements RawStore, Configurable {
 
   private List<String> getPartitionNamesNoTxn(String dbName, String tableName, short max) {
     List<String> pns = new ArrayList<>();
+    if (max == 0) {
+      return pns;
+    }
     dbName = normalizeIdentifier(dbName);
     tableName = normalizeIdentifier(tableName);
     Query query =
@@ -2749,6 +2774,7 @@ public class ObjectStore implements RawStore, Configurable {
             + "order by partitionName asc");
     query.declareParameters("java.lang.String t1, java.lang.String t2");
     query.setResult("partitionName");
+
     if (max > 0) {
       query.setRange(0, max);
     }
@@ -3713,24 +3739,38 @@ public class ObjectStore implements RawStore, Configurable {
       oldt.setViewOriginalText(newt.getViewOriginalText());
       oldt.setViewExpandedText(newt.getViewExpandedText());
       oldt.setRewriteEnabled(newt.isRewriteEnabled());
-      registerCreationSignature = newt.getCreationMetadata() != null;
-      if (registerCreationSignature) {
-        oldt.getCreationMetadata().setTables(newt.getCreationMetadata().getTables());
-        oldt.getCreationMetadata().setTxnList(newt.getCreationMetadata().getTxnList());
-      }
 
       // commit the changes
       success = commitTransaction();
     } finally {
       if (!success) {
         rollbackTransaction();
+      }
+    }
+  }
+
+  @Override
+  public void updateCreationMetadata(String dbname, String tablename, CreationMetadata cm)
+      throws MetaException {
+    boolean success = false;
+    try {
+      openTransaction();
+      dbname = normalizeIdentifier(dbname);
+      tablename = normalizeIdentifier(tablename);
+      // Update creation metadata
+      MCreationMetadata newMcm = convertToMCreationMetadata(cm);
+      MCreationMetadata mcm = getCreationMetadata(dbname, tablename);
+      mcm.setTables(newMcm.getTables());
+      mcm.setTxnList(newMcm.getTxnList());
+      // commit the changes
+      success = commitTransaction();
+    } finally {
+      if (!success) {
+        rollbackTransaction();
       } else {
-        if (MetaStoreUtils.isMaterializedViewTable(newTable) &&
-            registerCreationSignature) {
-          // Add to the invalidation cache if the creation signature has changed
-          MaterializationsInvalidationCache.get().alterMaterializedView(
-              newTable, newTable.getCreationMetadata().getTablesUsed());
-        }
+        // Add to the invalidation cache if the creation signature has changed
+        MaterializationsInvalidationCache.get().alterMaterializedView(
+            dbname, tablename, cm.getTablesUsed(), cm.getValidTxnList());
       }
     }
   }
@@ -3912,13 +3952,13 @@ public class ObjectStore implements RawStore, Configurable {
     }
 
     boolean success = false;
-    QueryWrapper queryWrapper = new QueryWrapper();
+    Query query = null;
 
     try {
       openTransaction();
       LOG.debug("execute removeUnusedColumnDescriptor");
 
-      Query query = pm.newQuery("select count(1) from " +
+      query = pm.newQuery("select count(1) from " +
         "org.apache.hadoop.hive.metastore.model.MStorageDescriptor where (this.cd == inCD)");
       query.declareParameters("MColumnDescriptor inCD");
       long count = ((Long)query.execute(oldCD)).longValue();
@@ -3931,7 +3971,7 @@ public class ObjectStore implements RawStore, Configurable {
       success = commitTransaction();
       LOG.debug("successfully deleted a CD in removeUnusedColumnDescriptor");
     } finally {
-      rollbackAndCleanup(success, queryWrapper);
+      rollbackAndCleanup(success, query);
     }
   }
 
@@ -8790,14 +8830,13 @@ public class ObjectStore implements RawStore, Configurable {
   public Function getFunction(String dbName, String funcName) throws MetaException {
     boolean commited = false;
     Function func = null;
+    Query query = null;
     try {
       openTransaction();
       func = convertToFunction(getMFunction(dbName, funcName));
       commited = commitTransaction();
     } finally {
-      if (!commited) {
-        rollbackTransaction();
-      }
+      rollbackAndCleanup(commited, query);
     }
     return func;
   }
@@ -8805,17 +8844,16 @@ public class ObjectStore implements RawStore, Configurable {
   @Override
   public List<Function> getAllFunctions() throws MetaException {
     boolean commited = false;
+    Query query = null;
     try {
       openTransaction();
-      Query query = pm.newQuery(MFunction.class);
+      query = pm.newQuery(MFunction.class);
       List<MFunction> allFunctions = (List<MFunction>) query.execute();
       pm.retrieveAll(allFunctions);
       commited = commitTransaction();
       return convertToFunctions(allFunctions);
     } finally {
-      if (!commited) {
-        rollbackTransaction();
-      }
+      rollbackAndCleanup(commited, query);
     }
   }
 
@@ -8876,10 +8914,7 @@ public class ObjectStore implements RawStore, Configurable {
       }
       return result;
     } finally {
-      if (!commited) {
-        rollbackAndCleanup(commited, query);
-        return null;
-      }
+      rollbackAndCleanup(commited, query);
     }
   }
 
@@ -8909,6 +8944,7 @@ public class ObjectStore implements RawStore, Configurable {
       query.setUnique(true);
       // only need to execute it to get db Lock
       query.execute();
+      query.closeAll();
     }).run();
   }
 
@@ -8974,8 +9010,8 @@ public class ObjectStore implements RawStore, Configurable {
     try {
       openTransaction();
       lockForUpdate();
-      Query objectQuery = pm.newQuery(MNotificationNextId.class);
-      Collection<MNotificationNextId> ids = (Collection) objectQuery.execute();
+      query = pm.newQuery(MNotificationNextId.class);
+      Collection<MNotificationNextId> ids = (Collection) query.execute();
       MNotificationNextId mNotificationNextId = null;
       boolean needToPersistId;
       if (CollectionUtils.isEmpty(ids)) {
@@ -9504,12 +9540,7 @@ public class ObjectStore implements RawStore, Configurable {
       }
       commited = commitTransaction();
     } finally {
-      if (!commited) {
-        rollbackTransaction();
-      }
-      if (query != null) {
-        query.closeAll();
-      }
+      rollbackAndCleanup(commited, query);
     }
     return uniqueConstraints;
   }
@@ -9574,12 +9605,7 @@ public class ObjectStore implements RawStore, Configurable {
       }
       commited = commitTransaction();
     } finally {
-      if (!commited) {
-        rollbackTransaction();
-      }
-      if (query != null) {
-        query.closeAll();
-      }
+      rollbackAndCleanup(commited, query);
     }
     return notNullConstraints;
   }

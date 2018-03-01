@@ -95,12 +95,11 @@ import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.conf.HiveConf.ConfVars;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
 import org.apache.hive.druid.MiniDruidCluster;
-import org.apache.hive.testutils.HiveTestEnvSetup;
 import org.apache.hadoop.hive.llap.LlapItUtils;
 import org.apache.hadoop.hive.llap.daemon.MiniLlapCluster;
 import org.apache.hadoop.hive.llap.io.api.LlapProxy;
 import org.apache.hadoop.hive.metastore.Warehouse;
-import org.apache.hadoop.hive.metastore.api.Index;
+import org.apache.hadoop.hive.ql.cache.results.QueryResultsCache;
 import org.apache.hadoop.hive.ql.exec.FunctionRegistry;
 import org.apache.hadoop.hive.ql.exec.Task;
 import org.apache.hadoop.hive.ql.exec.Utilities;
@@ -457,8 +456,7 @@ public class QTestUtil {
   private enum CoreClusterType {
     MR,
     TEZ,
-    SPARK,
-    DRUID
+    SPARK
   }
 
   public enum FsType {
@@ -477,7 +475,7 @@ public class QTestUtil {
     llap(CoreClusterType.TEZ, FsType.hdfs),
     llap_local(CoreClusterType.TEZ, FsType.local),
     none(CoreClusterType.MR, FsType.local),
-    druid(CoreClusterType.DRUID, FsType.hdfs);
+    druid(CoreClusterType.TEZ, FsType.hdfs);
 
 
     private final CoreClusterType coreClusterType;
@@ -649,6 +647,27 @@ public class QTestUtil {
 
     String uriString = fs.getUri().toString();
 
+    if (clusterType == MiniClusterType.druid) {
+      final String tempDir = System.getProperty("test.tmp.dir");
+      druidCluster = new MiniDruidCluster("mini-druid",
+          getLogDirectory(),
+          tempDir,
+          setup.zkPort,
+          Utilities.jarFinderGetJar(MiniDruidCluster.class)
+      );
+      final Path druidDeepStorage = fs.makeQualified(new Path(druidCluster.getDeepStorageDir()));
+      fs.mkdirs(druidDeepStorage);
+      conf.set("hive.druid.storage.storageDirectory", druidDeepStorage.toUri().getPath());
+      conf.set("hive.druid.metadata.db.type", "derby");
+      conf.set("hive.druid.metadata.uri", druidCluster.getMetadataURI());
+      final Path scratchDir = fs
+          .makeQualified(new Path(System.getProperty("test.tmp.dir"), "druidStagingDir"));
+      fs.mkdirs(scratchDir);
+      conf.set("hive.druid.working.directory", scratchDir.toUri().getPath());
+      druidCluster.init(conf);
+      druidCluster.start();
+    }
+
     if (clusterType.getCoreClusterType() == CoreClusterType.TEZ) {
       if (confDir != null && !confDir.isEmpty()) {
         conf.addResource(new URL("file://" + new File(confDir).toURI().getPath()
@@ -669,18 +688,6 @@ public class QTestUtil {
       mr = shims.getMiniSparkCluster(conf, 2, uriString, 1);
     } else if (clusterType == MiniClusterType.mr) {
       mr = shims.getMiniMrCluster(conf, 2, uriString, 1);
-    } else if (clusterType == MiniClusterType.druid) {
-      final String tempDir = System.getProperty("test.tmp.dir");
-      druidCluster = new MiniDruidCluster("mini-druid",
-              getLogDirectory(),
-              tempDir,
-              setup.zkPort,
-              Utilities.jarFinderGetJar(MiniDruidCluster.class)
-      );
-      druidCluster.init(conf);
-      final Path druidDeepStorage = fs.makeQualified(new Path(druidCluster.getDeepStorageDir()));
-      fs.mkdirs(druidDeepStorage);
-      druidCluster.start();
     }
   }
 
@@ -965,14 +972,6 @@ public class QTestUtil {
             continue;
           }
           db.dropTable(dbName, tblName, true, true, fsType == FsType.encrypted_hdfs);
-        } else {
-          // this table is defined in srcTables, drop all indexes on it
-         List<Index> indexes = db.getIndexes(dbName, tblName, (short)-1);
-          if (indexes != null && indexes.size() > 0) {
-            for (Index index : indexes) {
-              db.dropIndex(dbName, tblName, index.getIndexName(), true, true);
-            }
-          }
         }
       }
       if (!DEFAULT_DATABASE_NAME.equals(dbName)) {
@@ -1012,6 +1011,9 @@ public class QTestUtil {
     if (System.getenv(QTEST_LEAVE_FILES) != null) {
       return;
     }
+
+    // Remove any cached results from the previous test.
+    QueryResultsCache.cleanupInstance();
 
     // allocate and initialize a new conf since a test can
     // modify conf by using 'set' commands
@@ -1313,13 +1315,7 @@ public class QTestUtil {
   }
 
   public int execute(String tname) {
-    try {
-      return drv.run(qMap.get(tname)).getResponseCode();
-    } catch (CommandNeedRetryException e) {
-      LOG.error("driver failed to run the command: " + tname + " due to the exception: ", e);
-      e.printStackTrace();
-      return -1;
-    }
+    return drv.run(qMap.get(tname)).getResponseCode();
   }
 
   public int executeClient(String tname1, String tname2) {

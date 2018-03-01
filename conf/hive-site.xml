@@ -5355,7 +5355,7 @@
   </property>
   <property>
     <name>spark.master</name>
-    <value>mesos://fdp-spark-for-hive.marathon.mesos:7154</value>
+    <value>mesos://spark.marathon.mesos:7154</value>
     <description>Spark Master URL.</description>
   </property>
   <property>
@@ -5395,7 +5395,7 @@
   </property>
   <property>
     <name>spark.hive.jar.location</name>
-    <value>http://fdp-hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar</value>
+    <value>http://hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar</value>
     <description>URL accessible Hive jar</description>
   </property>
   <property>

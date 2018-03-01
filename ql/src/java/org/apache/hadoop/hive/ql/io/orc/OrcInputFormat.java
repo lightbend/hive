@@ -49,8 +49,8 @@ import org.apache.hadoop.fs.BlockLocation;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hive.common.ValidReadTxnList;
-import org.apache.hadoop.hive.common.ValidTxnList;
+import org.apache.hadoop.hive.common.ValidReaderWriteIdList;
+import org.apache.hadoop.hive.common.ValidWriteIdList;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.hadoop.hive.conf.HiveConf.ConfVars;
 import org.apache.hadoop.hive.metastore.Metastore;
@@ -199,7 +199,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
    * @param inputSplit
    * @return
    */
-  public boolean isAcidRead(Configuration conf, InputSplit inputSplit) {
+  public boolean isFullAcidRead(Configuration conf, InputSplit inputSplit) {
     if (!(inputSplit instanceof OrcSplit)) {
       return false;
     }
@@ -214,7 +214,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
     /*
      * Fallback for the case when OrcSplit flags do not contain hasBase and deltas
      */
-    return HiveConf.getBoolVar(conf, ConfVars.HIVE_ACID_TABLE_SCAN);
+    return AcidUtils.isFullAcidScan(conf);
   }
 
   private static class OrcRecordReader
@@ -308,9 +308,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
                                                   Configuration conf,
                                                   long offset, long length
                                                   ) throws IOException {
-
-    boolean isTransactionalTableScan = HiveConf.getBoolVar(conf, ConfVars.HIVE_ACID_TABLE_SCAN);
-    if (isTransactionalTableScan) {
+    if (AcidUtils.isFullAcidScan(conf)) {
       raiseAcidTablesMustBeReadWithAcidReaderException(conf);
     }
 
@@ -570,7 +568,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
     private final boolean forceThreadpool;
     private final AtomicInteger cacheHitCounter = new AtomicInteger(0);
     private final AtomicInteger numFilesCounter = new AtomicInteger(0);
-    private final ValidTxnList transactionList;
+    private final ValidWriteIdList writeIdList;
     private SplitStrategyKind splitStrategyKind;
     private final SearchArgument sarg;
     private final AcidOperationalProperties acidOperationalProperties;
@@ -652,8 +650,6 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
           footerCache = useExternalCache ? metaCache : localCache;
         }
       }
-      String value = conf.get(ValidTxnList.VALID_TXNS_KEY);
-      transactionList = value == null ? new ValidReadTxnList() : new ValidReadTxnList(value);
 
       // Determine the transactional_properties of the table from the job conf stored in context.
       // The table properties are copied to job conf at HiveInputFormat::addSplitsForGroup(),
@@ -664,6 +660,11 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
       String transactionalProperties = conf.get(hive_metastoreConstants.TABLE_TRANSACTIONAL_PROPERTIES);
       this.acidOperationalProperties = isTableTransactional ?
           AcidOperationalProperties.parseString(transactionalProperties) : null;
+
+      String value = conf.get(ValidWriteIdList.VALID_WRITEIDS_KEY);
+      writeIdList = value == null ? new ValidReaderWriteIdList() : new ValidReaderWriteIdList(value);
+      LOG.debug("Context:: Read ValidWriteIdList: " + writeIdList.toString()
+              + " isTransactionalTable: " + isTableTransactional);
     }
 
     @VisibleForTesting
@@ -935,10 +936,6 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
       }
     }
 
-
-
-
-
     private void runGetSplitsSync(List<Future<List<OrcSplit>>> splitFutures,
         List<OrcSplit> splits, UserGroupInformation ugi) throws IOException {
       UserGroupInformation tpUgi = ugi == null ? UserGroupInformation.getCurrentUser() : ugi;
@@ -1095,8 +1092,8 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
     /**
      * For plain or acid tables this is the root of the partition (or table if not partitioned).
      * For MM table this is delta/ or base/ dir.  In MM case applying of the ValidTxnList that
-     * {@link AcidUtils#getAcidState(Path, Configuration, ValidTxnList)} normally does has already
-     * been done in {@link HiveInputFormat#processPathsForMmRead(List, JobConf, ValidTxnList)}.
+     * {@link AcidUtils#getAcidState(Path, Configuration, ValidWriteIdList)} normally does has already
+     * been done in {@link HiveInputFormat#processPathsForMmRead(List, JobConf, ValidWriteIdList)}.
      */
     private final Path dir;
     private final Ref<Boolean> useFileIds;
@@ -1136,7 +1133,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
     private AcidDirInfo callInternal() throws IOException {
       //todo: shouldn't ignoreEmptyFiles be set based on ExecutionEngine?
       AcidUtils.Directory dirInfo = AcidUtils.getAcidState(dir, context.conf,
-          context.transactionList, useFileIds, true, null);
+          context.writeIdList, useFileIds, true, null);
       // find the base files (original or new style)
       List<AcidBaseFileInfo> baseFiles = new ArrayList<>();
       if (dirInfo.getBaseDirectory() == null) {
@@ -1175,8 +1172,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
               AcidUtils.AcidBaseFileType.ORIGINAL_BASE : AcidUtils.AcidBaseFileType.ACID_SCHEMA;
             PathFilter bucketFilter = parsedDelta.isRawFormat() ?
               AcidUtils.originalBucketFilter : AcidUtils.bucketFileFilter;
-            if(parsedDelta.isRawFormat() && parsedDelta.getMinTransaction() !=
-              parsedDelta.getMaxTransaction()) {
+            if (parsedDelta.isRawFormat() && parsedDelta.getMinWriteId() != parsedDelta.getMaxWriteId()) {
               //delta/ with files in raw format are a result of Load Data (as opposed to compaction
               //or streaming ingest so must have interval length == 1.
               throw new IllegalStateException("Delta in " + AcidUtils.AcidBaseFileType.ORIGINAL_BASE
@@ -1691,11 +1687,10 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
       pathFutures.add(ecs.submit(fileGenerator));
     }
 
-    boolean isTransactionalTableScan =
-        HiveConf.getBoolVar(conf, ConfVars.HIVE_ACID_TABLE_SCAN);
+    boolean isAcidTableScan = AcidUtils.isFullAcidScan(conf);
     boolean isSchemaEvolution = HiveConf.getBoolVar(conf, ConfVars.HIVE_SCHEMA_EVOLUTION);
     TypeDescription readerSchema =
-        OrcInputFormat.getDesiredRowTypeDescr(conf, isTransactionalTableScan, Integer.MAX_VALUE);
+        OrcInputFormat.getDesiredRowTypeDescr(conf, isAcidTableScan, Integer.MAX_VALUE);
     List<OrcProto.Type> readerTypes = null;
     if (readerSchema != null) {
       readerTypes = OrcUtils.getOrcTypes(readerSchema);
@@ -1703,7 +1698,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
     if (LOG.isDebugEnabled()) {
       LOG.debug("Generate splits schema evolution property " + isSchemaEvolution +
         " reader schema " + (readerSchema == null ? "NULL" : readerSchema.toString()) +
-        " transactional scan property " + isTransactionalTableScan);
+        " ACID scan property " + isAcidTableScan);
     }
 
     // complete path futures and schedule split generation
@@ -1891,7 +1886,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
                   Reporter reporter) throws IOException {
     //CombineHiveInputFormat may produce FileSplit that is not OrcSplit
     boolean vectorMode = Utilities.getIsVectorized(conf);
-    boolean isAcidRead = isAcidRead(conf, inputSplit);
+    boolean isAcidRead = isFullAcidRead(conf, inputSplit);
     if (!isAcidRead) {
       if (vectorMode) {
         return createVectorizedReader(inputSplit, conf, reporter);
@@ -2012,12 +2007,15 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
     final Reader.Options readOptions = OrcInputFormat.createOptionsForReader(conf);
     readOptions.range(split.getStart(), split.getLength());
 
-    String txnString = conf.get(ValidTxnList.VALID_TXNS_KEY);
-    ValidTxnList validTxnList = txnString == null ? new ValidReadTxnList() :
-      new ValidReadTxnList(txnString);
+    String txnString = conf.get(ValidWriteIdList.VALID_WRITEIDS_KEY);
+    ValidWriteIdList validWriteIdList
+            = (txnString == null) ? new ValidReaderWriteIdList() : new ValidReaderWriteIdList(txnString);
+    LOG.debug("getReader:: Read ValidWriteIdList: " + validWriteIdList.toString()
+            + " isTransactionalTable: " + HiveConf.getBoolVar(conf, ConfVars.HIVE_TRANSACTIONAL_TABLE_SCAN));
+
     final OrcRawRecordMerger records =
         new OrcRawRecordMerger(conf, true, reader, split.isOriginal(), bucket,
-            validTxnList, readOptions, deltas, mergerOptions);
+            validWriteIdList, readOptions, deltas, mergerOptions);
     return new RowReader<OrcStruct>() {
       OrcStruct innerRecord = records.createValue();
 
@@ -2299,7 +2297,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
   public RawReader<OrcStruct> getRawReader(Configuration conf,
                                            boolean collapseEvents,
                                            int bucket,
-                                           ValidTxnList validTxnList,
+                                           ValidWriteIdList validWriteIdList,
                                            Path baseDirectory,
                                            Path[] deltaDirectory
                                            ) throws IOException {
@@ -2323,7 +2321,7 @@ public class OrcInputFormat implements InputFormat<NullWritable, OrcStruct>,
       mergerOptions.rootPath(deltaDirectory[0].getParent());
     }
     return new OrcRawRecordMerger(conf, collapseEvents, null, isOriginal,
-        bucket, validTxnList, new Reader.Options(), deltaDirectory, mergerOptions);
+        bucket, validWriteIdList, new Reader.Options(), deltaDirectory, mergerOptions);
   }
 
   /**
