@@ -34,7 +34,7 @@
     <fileSet>
       <directory>${project.parent.basedir}</directory>
 
-    <excludes>
+      <excludes>
         <exclude>**/*.jar</exclude>
         <exclude>**/target/**</exclude>
         <exclude>**/.classpath</exclude>
