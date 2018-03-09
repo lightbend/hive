@@ -129,14 +129,14 @@ This version of Spark is built without Hive and R.
 * Make sure you can successfully run a Spark job by running:
 ````shell
 spark-submit \
-	--master mesos://spark.marathon.mesos:<port-of-DC/OS-spark-instance>  \
+	--master mesos://spark.marathon.mesos:<port-of-dcos-spark-instance>  \
 	--deploy-mode cluster  \
 	--conf spark.mesos.executor.docker.image=lightbend/fdp-spark-for-hive:2.2.1  \
 	--conf spark.mesos.driver.labels=DCOS_SPACE:/spark  \
 	--conf spark.mesos.task.labels=DCOS_SPACE:/spark  \
 	--conf spark.executor.cores=2  \
 	--conf spark.executor.memory=2g  \
-	--conf driver.memory=2g  \
+	--conf spark.driver.memory=2g  \
 	--conf spark.cores.max=8  \
 	--class org.apache.spark.examples.SparkPi  http://hive-on-spark.marathon.mesos/spark-examples_2.11-2.2.0.jar  1000  
 ````
