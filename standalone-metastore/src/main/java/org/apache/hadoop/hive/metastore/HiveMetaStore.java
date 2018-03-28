@@ -73,7 +73,6 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.common.StatsSetupConst;
 import org.apache.hadoop.hive.metastore.api.*;
 import org.apache.hadoop.hive.metastore.events.AddForeignKeyEvent;
-import org.apache.hadoop.hive.metastore.cache.CachedStore;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
 import org.apache.hadoop.hive.metastore.conf.MetastoreConf.ConfVars;
 import org.apache.hadoop.hive.metastore.events.AddNotNullConstraintEvent;
@@ -1423,13 +1422,14 @@ public class HiveMetaStore extends ThriftHiveMetastore {
         final EnvironmentContext envContext)
             throws AlreadyExistsException, MetaException,
             InvalidObjectException, NoSuchObjectException {
-      create_table_core(ms, tbl, envContext, null, null, null, null, null);
+      create_table_core(ms, tbl, envContext, null, null, null, null, null, null);
     }
 
     private void create_table_core(final RawStore ms, final Table tbl,
         final EnvironmentContext envContext, List<SQLPrimaryKey> primaryKeys,
         List<SQLForeignKey> foreignKeys, List<SQLUniqueConstraint> uniqueConstraints,
-        List<SQLNotNullConstraint> notNullConstraints, List<SQLDefaultConstraint> defaultConstraints)
+        List<SQLNotNullConstraint> notNullConstraints, List<SQLDefaultConstraint> defaultConstraints,
+                                   List<SQLCheckConstraint> checkConstraints)
         throws AlreadyExistsException, MetaException,
         InvalidObjectException, NoSuchObjectException {
       if (!MetaStoreUtils.validateName(tbl.getTableName(), conf)) {
@@ -1516,12 +1516,13 @@ public class HiveMetaStore extends ThriftHiveMetastore {
         }
 
         if (primaryKeys == null && foreignKeys == null
-                && uniqueConstraints == null && notNullConstraints == null && defaultConstraints == null) {
+                && uniqueConstraints == null && notNullConstraints == null && defaultConstraints == null
+            && checkConstraints == null) {
           ms.createTable(tbl);
         } else {
           // Set constraint name if null before sending to listener
           List<String> constraintNames = ms.createTableWithConstraints(tbl, primaryKeys, foreignKeys,
-              uniqueConstraints, notNullConstraints, defaultConstraints);
+              uniqueConstraints, notNullConstraints, defaultConstraints, checkConstraints);
           int primaryKeySize = 0;
           if (primaryKeys != null) {
             primaryKeySize = primaryKeys.size();
@@ -1557,11 +1558,22 @@ public class HiveMetaStore extends ThriftHiveMetastore {
               }
             }
           }
+          int defaultConstraintSize =  defaultConstraints.size();
           if (defaultConstraints!= null) {
             for (int i = 0; i < defaultConstraints.size(); i++) {
               if (defaultConstraints.get(i).getDc_name() == null) {
                 defaultConstraints.get(i).setDc_name(constraintNames.get(primaryKeySize + foreignKeySize
                     + uniqueConstraintSize + notNullConstraintSize + i));
+              }
+            }
+          }
+          if (checkConstraints!= null) {
+            for (int i = 0; i < checkConstraints.size(); i++) {
+              if (checkConstraints.get(i).getDc_name() == null) {
+                checkConstraints.get(i).setDc_name(constraintNames.get(primaryKeySize + foreignKeySize
+                                                                             + uniqueConstraintSize
+                                                                             + defaultConstraintSize
+                                                                           + notNullConstraintSize + i));
               }
             }
           }
@@ -1660,14 +1672,15 @@ public class HiveMetaStore extends ThriftHiveMetastore {
         final List<SQLPrimaryKey> primaryKeys, final List<SQLForeignKey> foreignKeys,
         List<SQLUniqueConstraint> uniqueConstraints,
         List<SQLNotNullConstraint> notNullConstraints,
-        List<SQLDefaultConstraint> defaultConstraints)
+        List<SQLDefaultConstraint> defaultConstraints,
+        List<SQLCheckConstraint> checkConstraints)
         throws AlreadyExistsException, MetaException, InvalidObjectException {
       startFunction("create_table", ": " + tbl.toString());
       boolean success = false;
       Exception ex = null;
       try {
         create_table_core(getMS(), tbl, null, primaryKeys, foreignKeys,
-            uniqueConstraints, notNullConstraints, defaultConstraints);
+            uniqueConstraints, notNullConstraints, defaultConstraints, checkConstraints);
         success = true;
       } catch (NoSuchObjectException e) {
         ex = e;
@@ -1991,6 +2004,58 @@ public class HiveMetaStore extends ThriftHiveMetastore {
           }
         }
         endFunction("add_default_constraint", success, ex, constraintName);
+      }
+    }
+
+    @Override
+    public void add_check_constraint(AddCheckConstraintRequest req)
+        throws MetaException, InvalidObjectException {
+      List<SQLCheckConstraint> checkConstraintCols= req.getCheckConstraintCols();
+      String constraintName = (checkConstraintCols != null && checkConstraintCols.size() > 0) ?
+          checkConstraintCols.get(0).getDc_name() : "null";
+      startFunction("add_check_constraint", ": " + constraintName);
+      boolean success = false;
+      Exception ex = null;
+      RawStore ms = getMS();
+      try {
+        ms.openTransaction();
+        List<String> constraintNames = ms.addCheckConstraints(checkConstraintCols);
+        if (checkConstraintCols != null) {
+          for (int i = 0; i < checkConstraintCols.size(); i++) {
+            if (checkConstraintCols.get(i).getDc_name() == null) {
+              checkConstraintCols.get(i).setDc_name(constraintNames.get(i));
+            }
+          }
+        }
+        if (transactionalListeners.size() > 0) {
+          if (checkConstraintCols != null && checkConstraintCols.size() > 0) {
+            //TODO: Even listener for check
+            //AddcheckConstraintEvent addcheckConstraintEvent = new AddcheckConstraintEvent(checkConstraintCols, true, this);
+            //for (MetaStoreEventListener transactionalListener : transactionalListeners) {
+            // transactionalListener.onAddNotNullConstraint(addcheckConstraintEvent);
+            //}
+          }
+        }
+        success = ms.commitTransaction();
+      } catch (Exception e) {
+        ex = e;
+        if (e instanceof MetaException) {
+          throw (MetaException) e;
+        } else if (e instanceof InvalidObjectException) {
+          throw (InvalidObjectException) e;
+        } else {
+          throw newMetaException(e);
+        }
+      } finally {
+        if (!success) {
+          ms.rollbackTransaction();
+        } else if (checkConstraintCols != null && checkConstraintCols.size() > 0) {
+          for (MetaStoreEventListener listener : listeners) {
+            //AddNotNullConstraintEvent addCheckConstraintEvent = new AddNotNullConstraintEvent(checkConstraintCols, true, this);
+            //listener.onAddCheckConstraint(addCheckConstraintEvent);
+          }
+        }
+        endFunction("add_check_constraint", success, ex, constraintName);
       }
     }
 
@@ -3390,12 +3455,25 @@ public class HiveMetaStore extends ThriftHiveMetastore {
     public List<Partition> exchange_partitions(Map<String, String> partitionSpecs,
         String sourceDbName, String sourceTableName, String destDbName,
         String destTableName) throws TException {
+      if (partitionSpecs == null || sourceDbName == null || sourceTableName == null
+          || destDbName == null || destTableName == null) {
+        throw new MetaException("The DB and table name for the source and destination tables,"
+            + " and the partition specs must not be null.");
+      }
       boolean success = false;
       boolean pathCreated = false;
       RawStore ms = getMS();
       ms.openTransaction();
       Table destinationTable = ms.getTable(destDbName, destTableName);
+      if (destinationTable == null) {
+        throw new MetaException(
+            "The destination table " + destDbName + "." + destTableName + " not found");
+      }
       Table sourceTable = ms.getTable(sourceDbName, sourceTableName);
+      if (sourceTable == null) {
+        throw new MetaException(
+            "The source table " + sourceDbName + "." + sourceTableName + " not found");
+      }
       List<String> partVals = MetaStoreUtils.getPvals(sourceTable.getPartitionKeys(),
           partitionSpecs);
       List<String> partValsPresent = new ArrayList<> ();
@@ -3432,6 +3510,20 @@ public class HiveMetaStore extends ThriftHiveMetastore {
       Map<String, String> transactionalListenerResponsesForAddPartition = Collections.emptyMap();
       List<Map<String, String>> transactionalListenerResponsesForDropPartition =
           Lists.newArrayListWithCapacity(partitionsToExchange.size());
+
+      // Check if any of the partitions already exists in destTable.
+      List<String> destPartitionNames =
+          ms.listPartitionNames(destDbName, destTableName, (short) -1);
+      if (destPartitionNames != null && !destPartitionNames.isEmpty()) {
+        for (Partition partition : partitionsToExchange) {
+          String partToExchangeName =
+              Warehouse.makePartName(destinationTable.getPartitionKeys(), partition.getValues());
+          if (destPartitionNames.contains(partToExchangeName)) {
+            throw new MetaException("The partition " + partToExchangeName
+                + " already exists in the table " + destTableName);
+          }
+        }
+      }
 
       try {
         for (Partition partition: partitionsToExchange) {
@@ -3528,6 +3620,16 @@ public class HiveMetaStore extends ThriftHiveMetastore {
       boolean mustPurge = false;
       boolean isExternalTbl = false;
       Map<String, String> transactionalListenerResponses = Collections.emptyMap();
+
+      if (db_name == null) {
+        throw new MetaException("The DB name cannot be null.");
+      }
+      if (tbl_name == null) {
+        throw new MetaException("The table name cannot be null.");
+      }
+      if (part_vals == null) {
+        throw new MetaException("The partition values cannot be null.");
+      }
 
       try {
         ms.openTransaction();
@@ -7110,6 +7212,30 @@ public class HiveMetaStore extends ThriftHiveMetastore {
       }
       return new DefaultConstraintsResponse(ret);
     }
+
+    @Override
+    public CheckConstraintsResponse get_check_constraints(CheckConstraintsRequest request)
+        throws TException {
+      String db_name = request.getDb_name();
+      String tbl_name = request.getTbl_name();
+      startTableFunction("get_check_constraints", db_name, tbl_name);
+      List<SQLCheckConstraint> ret = null;
+      Exception ex = null;
+      try {
+        ret = getMS().getCheckConstraints(db_name, tbl_name);
+      } catch (Exception e) {
+        ex = e;
+        if (e instanceof MetaException) {
+          throw (MetaException) e;
+        } else {
+          throw newMetaException(e);
+        }
+      } finally {
+        endFunction("get_check_constraints", ret != null, ex, tbl_name);
+      }
+      return new CheckConstraintsResponse(ret);
+    }
+
     @Override
     public String get_metastore_db_uuid() throws TException {
       try {
@@ -7961,9 +8087,6 @@ public class HiveMetaStore extends ThriftHiveMetastore {
         }
         ThreadPool.shutdown();
       }, 10);
-
-      // This will only initialize the cache if configured.
-      CachedStore.initSharedCacheAsync(conf);
 
       //Start Metrics for Standalone (Remote) Mode
       if (MetastoreConf.getBoolVar(conf, ConfVars.METRICS_ENABLED)) {

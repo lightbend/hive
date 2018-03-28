@@ -417,7 +417,7 @@ public class ImportSemanticAnalyzer extends BaseSemanticAnalyzer {
     } else {
       CopyWork cw = new CopyWork(dataPath, destPath, false);
       cw.setSkipSourceMmDirs(isSourceMm);
-      copyTask = TaskFactory.get(cw, x.getConf());
+      copyTask = TaskFactory.get(cw);
     }
 
     LoadTableDesc loadTableWork = new LoadTableDesc(
@@ -466,11 +466,7 @@ public class ImportSemanticAnalyzer extends BaseSemanticAnalyzer {
     } else {
       partSpec.setLocation(ptn.getLocation()); // use existing location
     }
-    return TaskFactory.get(new DDLWork(
-        x.getInputs(),
-        x.getOutputs(),
-        addPartitionDesc
-    ), x.getConf());
+    return TaskFactory.get(new DDLWork(x.getInputs(), x.getOutputs(), addPartitionDesc), x.getConf());
   }
 
  private static Task<?> addSinglePartition(URI fromURI, FileSystem fs, ImportTableDesc tblDesc,
@@ -484,8 +480,8 @@ public class ImportSemanticAnalyzer extends BaseSemanticAnalyzer {
           + partSpecToString(partSpec.getPartSpec()));
       // addPartitionDesc already has the right partition location
       @SuppressWarnings("unchecked")
-      Task<?> addPartTask = TaskFactory.get(new DDLWork(x.getInputs(),
-          x.getOutputs(), addPartitionDesc), x.getConf());
+      Task<?> addPartTask = TaskFactory.get(
+              new DDLWork(x.getInputs(), x.getOutputs(), addPartitionDesc), x.getConf());
       return addPartTask;
     } else {
       String srcLocation = partSpec.getLocation();
@@ -515,11 +511,12 @@ public class ImportSemanticAnalyzer extends BaseSemanticAnalyzer {
       } else {
         CopyWork cw = new CopyWork(new Path(srcLocation), destPath, false);
         cw.setSkipSourceMmDirs(isSourceMm);
-        copyTask = TaskFactory.get(cw, x.getConf());
+        copyTask = TaskFactory.get(cw);
       }
 
-      Task<?> addPartTask = TaskFactory.get(new DDLWork(x.getInputs(),
-          x.getOutputs(), addPartitionDesc), x.getConf());
+      Task<?> addPartTask = TaskFactory.get(
+              new DDLWork(x.getInputs(), x.getOutputs(), addPartitionDesc), x.getConf());
+
       // Note: this sets LoadFileType incorrectly for ACID; is that relevant for import?
       //       See setLoadFileType and setIsAcidIow calls elsewhere for an example.
       LoadTableDesc loadTableWork = new LoadTableDesc(moveTaskSrc, Utilities.getTableDesc(table),
@@ -528,8 +525,9 @@ public class ImportSemanticAnalyzer extends BaseSemanticAnalyzer {
               writeId);
       loadTableWork.setStmtId(stmtId);
       loadTableWork.setInheritTableSpecs(false);
-      Task<?> loadPartTask = TaskFactory.get(new MoveWork(
-          x.getInputs(), x.getOutputs(), loadTableWork, null, false), x.getConf(), true);
+      Task<?> loadPartTask = TaskFactory.get(
+              new MoveWork(x.getInputs(), x.getOutputs(), loadTableWork, null, false),
+              x.getConf());
       copyTask.addDependentTask(loadPartTask);
       addPartTask.addDependentTask(loadPartTask);
       x.getTasks().add(copyTask);
@@ -830,8 +828,8 @@ public class ImportSemanticAnalyzer extends BaseSemanticAnalyzer {
     if (table != null) {
       if (table.isPartitioned()) {
         x.getLOG().debug("table partitioned");
-        Task<?> ict = createImportCommitTask(
-            table.getDbName(), table.getTableName(), writeId, stmtId, x.getConf(),
+        Task<?> ict = createImportCommitTask(x.getConf(),
+            table.getDbName(), table.getTableName(), writeId, stmtId,
             AcidUtils.isInsertOnlyTable(table.getParameters()));
 
         for (AddPartitionDesc addPartitionDesc : partitionDescs) {
@@ -867,8 +865,8 @@ public class ImportSemanticAnalyzer extends BaseSemanticAnalyzer {
       x.getOutputs().add(new WriteEntity(parentDb, WriteEntity.WriteType.DDL_SHARED));
 
       if (isPartitioned(tblDesc)) {
-        Task<?> ict = createImportCommitTask(
-            tblDesc.getDatabaseName(), tblDesc.getTableName(), writeId, stmtId, x.getConf(),
+        Task<?> ict = createImportCommitTask(x.getConf(),
+            tblDesc.getDatabaseName(), tblDesc.getTableName(), writeId, stmtId,
             AcidUtils.isInsertOnlyTable(tblDesc.getTblProps()));
         for (AddPartitionDesc addPartitionDesc : partitionDescs) {
           t.addDependentTask(addSinglePartition(fromURI, fs, tblDesc, table, wh, addPartitionDesc,
@@ -903,9 +901,8 @@ public class ImportSemanticAnalyzer extends BaseSemanticAnalyzer {
   }
 
   private static Task<?> createImportCommitTask(
-      String dbName, String tblName, Long writeId, int stmtId, HiveConf conf, boolean isMmTable) {
+      HiveConf conf, String dbName, String tblName, Long writeId, int stmtId, boolean isMmTable) {
     // TODO: noop, remove?
-    @SuppressWarnings("unchecked")
     Task<ImportCommitWork> ict = (!isMmTable) ? null : TaskFactory.get(
         new ImportCommitWork(dbName, tblName, writeId, stmtId), conf);
     return ict;
@@ -995,8 +992,8 @@ public class ImportSemanticAnalyzer extends BaseSemanticAnalyzer {
 
       if (!replicationSpec.isMetadataOnly()) {
         if (isPartitioned(tblDesc)) {
-          Task<?> ict = createImportCommitTask(
-              tblDesc.getDatabaseName(), tblDesc.getTableName(), writeId, stmtId, x.getConf(),
+          Task<?> ict = createImportCommitTask(x.getConf(),
+              tblDesc.getDatabaseName(), tblDesc.getTableName(), writeId, stmtId,
               AcidUtils.isInsertOnlyTable(tblDesc.getTblProps()));
           for (AddPartitionDesc addPartitionDesc : partitionDescs) {
             addPartitionDesc.setReplicationSpec(replicationSpec);
@@ -1022,8 +1019,8 @@ public class ImportSemanticAnalyzer extends BaseSemanticAnalyzer {
           Map<String, String> partSpec = addPartitionDesc.getPartition(0).getPartSpec();
           org.apache.hadoop.hive.ql.metadata.Partition ptn = null;
           Task<?> ict = replicationSpec.isMetadataOnly() ? null : createImportCommitTask(
-              tblDesc.getDatabaseName(), tblDesc.getTableName(), writeId, stmtId, x.getConf(),
-              AcidUtils.isInsertOnlyTable(tblDesc.getTblProps()));
+                  x.getConf(), tblDesc.getDatabaseName(), tblDesc.getTableName(), writeId, stmtId,
+                  AcidUtils.isInsertOnlyTable(tblDesc.getTblProps()));
           if ((ptn = x.getHive().getPartition(table, partSpec, false)) == null) {
             if (!replicationSpec.isMetadataOnly()){
               x.getTasks().add(addSinglePartition(

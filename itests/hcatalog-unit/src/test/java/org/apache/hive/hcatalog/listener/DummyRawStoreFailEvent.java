@@ -68,6 +68,7 @@ import org.apache.hadoop.hive.metastore.api.WMTrigger;
 import org.apache.hadoop.hive.metastore.api.WMValidateResourcePlanResponse;
 import org.apache.hadoop.hive.metastore.api.Role;
 import org.apache.hadoop.hive.metastore.api.RolePrincipalGrant;
+import org.apache.hadoop.hive.metastore.api.SQLCheckConstraint;
 import org.apache.hadoop.hive.metastore.api.SQLDefaultConstraint;
 import org.apache.hadoop.hive.metastore.api.SQLForeignKey;
 import org.apache.hadoop.hive.metastore.api.SQLNotNullConstraint;
@@ -906,6 +907,12 @@ public class DummyRawStoreFailEvent implements RawStore, Configurable {
   }
 
   @Override
+  public List<SQLCheckConstraint> getCheckConstraints(String db_name, String tbl_name)
+      throws MetaException {
+    return null;
+  }
+
+  @Override
   public List<SQLDefaultConstraint> getDefaultConstraints(String db_name, String tbl_name)
       throws MetaException {
     return null;
@@ -916,7 +923,8 @@ public class DummyRawStoreFailEvent implements RawStore, Configurable {
                                          List<SQLPrimaryKey> primaryKeys, List<SQLForeignKey> foreignKeys,
                                          List<SQLUniqueConstraint> uniqueConstraints,
                                          List<SQLNotNullConstraint> notNullConstraints,
-                                         List<SQLDefaultConstraint> defaultConstraints)
+                                         List<SQLDefaultConstraint> defaultConstraints,
+                                         List<SQLCheckConstraint> checkConstraints)
       throws InvalidObjectException, MetaException {
     return null;
   }
@@ -957,6 +965,12 @@ public class DummyRawStoreFailEvent implements RawStore, Configurable {
   }
 
   @Override
+  public List<String> addCheckConstraints(List<SQLCheckConstraint> nns)
+      throws InvalidObjectException, MetaException {
+    return null;
+  }
+
+  @Override
   public String getMetastoreDbUuid() throws MetaException {
     throw new MetaException("getMetastoreDbUuid is not implemented");
   }
@@ -976,7 +990,7 @@ public class DummyRawStoreFailEvent implements RawStore, Configurable {
   public List<WMResourcePlan> getAllResourcePlans() throws MetaException {
     return objectStore.getAllResourcePlans();
   }
- 
+
   @Override
   public WMFullResourcePlan alterResourcePlan(String name, WMNullableResourcePlan resourcePlan,
       boolean canActivateDisabled, boolean canDeactivate, boolean isReplace)
@@ -1067,13 +1081,6 @@ public class DummyRawStoreFailEvent implements RawStore, Configurable {
   public void dropWMTriggerToPoolMapping(String resourcePlanName, String triggerName,
       String poolPath) throws NoSuchObjectException, InvalidOperationException, MetaException {
     objectStore.dropWMTriggerToPoolMapping(resourcePlanName, triggerName, poolPath);
-  }
-
-  @Override
-  public List<ColStatsObjWithSourceInfo> getPartitionColStatsForDatabase(String dbName)
-      throws MetaException, NoSuchObjectException {
-    // TODO Auto-generated method stub
-    return null;
   }
 
   public void createISchema(ISchema schema) throws AlreadyExistsException, MetaException,

@@ -111,7 +111,7 @@ import org.apache.hadoop.hive.ql.plan.FileSinkDesc;
 import org.apache.hadoop.hive.ql.plan.HiveOperation;
 import org.apache.hadoop.hive.ql.plan.TableDesc;
 import org.apache.hadoop.hive.ql.plan.mapper.PlanMapper;
-import org.apache.hadoop.hive.ql.plan.mapper.RuntimeStatsSource;
+import org.apache.hadoop.hive.ql.plan.mapper.StatsSource;
 import org.apache.hadoop.hive.ql.processors.CommandProcessorResponse;
 import org.apache.hadoop.hive.ql.security.authorization.AuthorizationUtils;
 import org.apache.hadoop.hive.ql.security.authorization.HiveAuthorizationProvider;
@@ -194,7 +194,11 @@ public class Driver implements IDriver {
   // Transaction manager used for the query. This will be set at compile time based on
   // either initTxnMgr or from the SessionState, in that order.
   private HiveTxnManager queryTxnMgr;
-  private RuntimeStatsSource runtimeStatsSource;
+  private StatsSource statsSource;
+
+  // Boolean to store information about whether valid txn list was generated
+  // for current query.
+  private boolean validTxnListsGenerated;
 
   private CacheUsage cacheUsage;
   private CacheEntry usedCacheEntry;
@@ -284,6 +288,10 @@ public class Driver implements IDriver {
   @Override
   public Schema getSchema() {
     return schema;
+  }
+
+  public Schema getExplainSchema() {
+    return new Schema(ExplainTask.getResultSchema(), null);
   }
 
   @Override
@@ -570,7 +578,7 @@ public class Driver implements IDriver {
         setTriggerContext(queryId);
       }
 
-      ctx.setRuntimeStatsSource(runtimeStatsSource);
+      ctx.setStatsSource(statsSource);
       ctx.setCmd(command);
       ctx.setHDFSCleanup(true);
 
@@ -613,6 +621,9 @@ public class Driver implements IDriver {
         tree =  hookRunner.runPreAnalyzeHooks(hookCtx, tree);
         sem = SemanticAnalyzerFactory.get(queryState, tree);
         openTransaction();
+        // TODO: Lock acquisition should be moved before this method call
+        // when we want to implement lock-based concurrency control
+        generateValidTxnList();
         sem.analyze(tree, ctx);
         hookCtx.update(sem);
 
@@ -620,6 +631,9 @@ public class Driver implements IDriver {
       } else {
         sem = SemanticAnalyzerFactory.get(queryState, tree);
         openTransaction();
+        // TODO: Lock acquisition should be moved before this method call
+        // when we want to implement lock-based concurrency control
+        generateValidTxnList();
         sem.analyze(tree, ctx);
       }
       LOG.info("Semantic Analysis Completed");
@@ -765,6 +779,24 @@ public class Driver implements IDriver {
           throw createProcessorResponse(10);
         }
         long txnid = queryTxnMgr.openTxn(ctx, userFromUGI);
+      }
+    }
+  }
+
+  private void generateValidTxnList() throws LockException {
+    // Record current valid txn list that will be used throughout the query
+    // compilation and processing. We only do this if 1) a transaction
+    // was already opened and 2) the list has not been recorded yet,
+    // e.g., by an explicit open transaction command.
+    validTxnListsGenerated = false;
+    String currentTxnString = conf.get(ValidTxnList.VALID_TXNS_KEY);
+    if (queryTxnMgr.isTxnOpen() && (currentTxnString == null || currentTxnString.isEmpty())) {
+      try {
+        recordValidTxns(queryTxnMgr);
+        validTxnListsGenerated = true;
+      } catch (LockException e) {
+        LOG.error("Exception while acquiring valid txn list", e);
+        throw e;
       }
     }
   }
@@ -1360,8 +1392,10 @@ public class Driver implements IDriver {
       /*It's imperative that {@code acquireLocks()} is called for all commands so that
       HiveTxnManager can transition its state machine correctly*/
       queryTxnMgr.acquireLocks(plan, ctx, userFromUGI, lDrvState);
-      if (queryTxnMgr.recordSnapshot(plan)) {
-        recordValidTxns(queryTxnMgr);
+      // This check is for controlling the correctness of the current state
+      if (queryTxnMgr.recordSnapshot(plan) && !validTxnListsGenerated) {
+        throw new IllegalStateException("calling recordValidTxn() more than once in the same " +
+            JavaUtils.txnIdToString(queryTxnMgr.getCurrentTxnId()));
       }
       if (plan.hasAcidResourcesInQuery()) {
         recordValidWriteIds(queryTxnMgr);
@@ -1519,11 +1553,21 @@ public class Driver implements IDriver {
 
   @Override
   public CommandProcessorResponse compileAndRespond(String command) {
+    return compileAndRespond(command, false);
+  }
+
+  public CommandProcessorResponse compileAndRespond(String command, boolean cleanupTxnList) {
     try {
       compileInternal(command, false);
       return createProcessorResponse(0);
     } catch (CommandProcessorResponse e) {
       return e;
+    } finally {
+      if (cleanupTxnList) {
+        // Valid txn list might be generated for a query compiled using this
+        // command, thus we need to reset it
+        conf.unset(ValidTxnList.VALID_TXNS_KEY);
+      }
     }
   }
 
@@ -1854,7 +1898,7 @@ public class Driver implements IDriver {
 
   private void useFetchFromCache(CacheEntry cacheEntry) {
     // Change query FetchTask to use new location specified in results cache.
-    FetchTask fetchTaskFromCache = (FetchTask) TaskFactory.get(cacheEntry.getFetchWork(), conf);
+    FetchTask fetchTaskFromCache = (FetchTask) TaskFactory.get(cacheEntry.getFetchWork());
     fetchTaskFromCache.initialize(queryState, plan, null, ctx.getOpContext());
     plan.setFetchTask(fetchTaskFromCache);
     cacheUsage = new CacheUsage(CacheUsage.CacheStatus.QUERY_USING_CACHE, cacheEntry);
@@ -2650,8 +2694,23 @@ public class Driver implements IDriver {
     return hookRunner;
   }
 
-  public void setRuntimeStatsSource(RuntimeStatsSource runtimeStatsSource) {
-    this.runtimeStatsSource = runtimeStatsSource;
+  public void setStatsSource(StatsSource runtimeStatsSource) {
+    this.statsSource = runtimeStatsSource;
   }
 
+  @Override
+  public boolean hasResultSet() {
+
+    // TODO explain should use a FetchTask for reading
+    for (Task<? extends Serializable> task : plan.getRootTasks()) {
+      if (task.getClass() == ExplainTask.class) {
+        return true;
+      }
+    }
+    if (plan.getFetchTask() != null && schema != null && schema.isSetFieldSchemas()) {
+      return true;
+    } else {
+      return false;
+    }
+  }
 }

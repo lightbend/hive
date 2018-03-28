@@ -51,7 +51,7 @@ import org.slf4j.LoggerFactory;
 import com.google.common.base.Preconditions;
 
 public class HS2ActivePassiveHARegistry extends ZkRegistryBase<HiveServer2Instance> implements
-  ServiceRegistry<HiveServer2Instance>, HiveServer2HAInstanceSet {
+  ServiceRegistry<HiveServer2Instance>, HiveServer2HAInstanceSet, HiveServer2.FailoverHandler {
   private static final Logger LOG = LoggerFactory.getLogger(HS2ActivePassiveHARegistry.class);
   static final String ACTIVE_ENDPOINT = "activeEndpoint";
   static final String PASSIVE_ENDPOINT = "passiveEndpoint";
@@ -60,8 +60,11 @@ public class HS2ActivePassiveHARegistry extends ZkRegistryBase<HiveServer2Instan
   private static final String INSTANCE_GROUP = "instances";
   private static final String LEADER_LATCH_PATH = "/_LEADER";
   private LeaderLatch leaderLatch;
+  private Map<LeaderLatchListener, ExecutorService> registeredListeners = new HashMap<>();
+  private String latchPath;
   private ServiceRecord srv;
   private boolean isClient;
+  private final String uniqueId;
 
   // There are 2 paths under which the instances get registered
   // 1) Standard path used by ZkRegistryBase where all instances register themselves (also stores metadata)
@@ -79,7 +82,7 @@ public class HS2ActivePassiveHARegistry extends ZkRegistryBase<HiveServer2Instan
     String keytab = HiveConf.getVar(conf, HiveConf.ConfVars.HIVE_SERVER2_KERBEROS_KEYTAB);
     String zkNameSpacePrefix = zkNameSpace + "-";
     return new HS2ActivePassiveHARegistry(null, zkNameSpacePrefix, LEADER_LATCH_PATH, principal, keytab,
-      SASL_LOGIN_CONTEXT_NAME, conf, isClient);
+      isClient ? null : SASL_LOGIN_CONTEXT_NAME, conf, isClient);
   }
 
   private HS2ActivePassiveHARegistry(final String instanceName, final String zkNamespacePrefix,
@@ -89,8 +92,14 @@ public class HS2ActivePassiveHARegistry extends ZkRegistryBase<HiveServer2Instan
     super(instanceName, conf, null, zkNamespacePrefix, null, INSTANCE_PREFIX, INSTANCE_GROUP,
       saslContextName, krbPrincipal, krbKeytab, null);
     this.isClient = isClient;
-    leaderLatch = new LeaderLatch(zooKeeperClient, leaderLatchPath, UNIQUE_ID.toString(),
-      LeaderLatch.CloseMode.NOTIFY_LEADER);
+    if (HiveConf.getBoolVar(conf, HiveConf.ConfVars.HIVE_IN_TEST) &&
+      conf.get(ZkRegistryBase.UNIQUE_IDENTIFIER) != null) {
+      this.uniqueId = conf.get(ZkRegistryBase.UNIQUE_IDENTIFIER);
+    } else {
+      this.uniqueId = UNIQUE_ID.toString();
+    }
+    this.latchPath = leaderLatchPath;
+    this.leaderLatch = getNewLeaderLatchPath();
   }
 
   @Override
@@ -99,7 +108,7 @@ public class HS2ActivePassiveHARegistry extends ZkRegistryBase<HiveServer2Instan
     if (!isClient) {
       this.srv = getNewServiceRecord();
       register();
-      leaderLatch.addListener(new HS2LeaderLatchListener());
+      registerLeaderLatchListener(new HS2LeaderLatchListener(), null);
       try {
         // all participating instances uses the same latch path, and curator randomly chooses one instance to be leader
         // which can be verified via leaderLatch.hasLeadership()
@@ -110,6 +119,7 @@ public class HS2ActivePassiveHARegistry extends ZkRegistryBase<HiveServer2Instan
       LOG.info("Registered HS2 with ZK. service record: {}", srv);
     } else {
       populateCache();
+      LOG.info("Populating instances cache for client");
     }
   }
 
@@ -121,7 +131,7 @@ public class HS2ActivePassiveHARegistry extends ZkRegistryBase<HiveServer2Instan
   @Override
   public String register() throws IOException {
     updateEndpoint(srv, PASSIVE_ENDPOINT);
-    return registerServiceRecord(srv);
+    return registerServiceRecord(srv, uniqueId);
   }
 
   @Override
@@ -149,9 +159,10 @@ public class HS2ActivePassiveHARegistry extends ZkRegistryBase<HiveServer2Instan
     addEndpointToServiceRecord(getNewServiceRecord(), PASSIVE_ENDPOINT);
   }
 
-  private void addEndpointToServiceRecord(final ServiceRecord srv, final String endpointName) throws IOException {
+  private void addEndpointToServiceRecord(
+      final ServiceRecord srv, final String endpointName) throws IOException {
     updateEndpoint(srv, endpointName);
-    updateServiceRecord(srv);
+    updateServiceRecord(srv, doCheckAcls, true);
   }
 
   private void updateEndpoint(final ServiceRecord srv, final String endpointName) {
@@ -195,6 +206,38 @@ public class HS2ActivePassiveHARegistry extends ZkRegistryBase<HiveServer2Instan
 
   private boolean hasLeadership() {
     return leaderLatch.hasLeadership();
+  }
+
+  @Override
+  public void failover() throws Exception {
+    if (hasLeadership()) {
+      LOG.info("Failover request received for HS2 instance: {}. Restarting leader latch..", uniqueId);
+      leaderLatch.close(LeaderLatch.CloseMode.NOTIFY_LEADER);
+      leaderLatch = getNewLeaderLatchPath();
+      // re-attach all registered listeners
+      for (Map.Entry<LeaderLatchListener, ExecutorService> registeredListener : registeredListeners.entrySet()) {
+        if (registeredListener.getValue() == null) {
+          leaderLatch.addListener(registeredListener.getKey());
+        } else {
+          leaderLatch.addListener(registeredListener.getKey(), registeredListener.getValue());
+        }
+      }
+      leaderLatch.start();
+      LOG.info("Failover complete. Leader latch restarted successfully. New leader: {}",
+        leaderLatch.getLeader().getId());
+    } else {
+      LOG.warn("Failover request received for HS2 instance: {} that is not leader. Skipping..", uniqueId);
+    }
+  }
+
+  /**
+   * Returns a new instance of leader latch path but retains the same uniqueId. This is only used when HS2 startsup or
+   * when a manual failover is triggered (in which case uniqueId will still remain as the instance has not restarted)
+   *
+   * @return - new leader latch
+   */
+  private LeaderLatch getNewLeaderLatchPath() {
+    return new LeaderLatch(zooKeeperClient, latchPath, uniqueId, LeaderLatch.CloseMode.NOTIFY_LEADER);
   }
 
   private class HS2LeaderLatchListener implements LeaderLatchListener {
@@ -275,7 +318,12 @@ public class HS2ActivePassiveHARegistry extends ZkRegistryBase<HiveServer2Instan
    * @param executorService - event handler executor service
    */
   void registerLeaderLatchListener(final LeaderLatchListener latchListener, final ExecutorService executorService) {
-    leaderLatch.addListener(latchListener, executorService);
+    registeredListeners.put(latchListener, executorService);
+    if (executorService == null) {
+      leaderLatch.addListener(latchListener);
+    } else {
+      leaderLatch.addListener(latchListener, executorService);
+    }
   }
 
   private Map<String, String> getConfsToPublish() {
@@ -283,9 +331,12 @@ public class HS2ActivePassiveHARegistry extends ZkRegistryBase<HiveServer2Instan
     // Hostname
     confsToPublish.put(HiveConf.ConfVars.HIVE_SERVER2_THRIFT_BIND_HOST.varname,
       conf.get(HiveConf.ConfVars.HIVE_SERVER2_THRIFT_BIND_HOST.varname));
+    // Web port
+    confsToPublish.put(HiveConf.ConfVars.HIVE_SERVER2_WEBUI_PORT.varname,
+      conf.get(HiveConf.ConfVars.HIVE_SERVER2_WEBUI_PORT.varname));
     // Hostname:port
     confsToPublish.put(INSTANCE_URI_CONFIG, conf.get(INSTANCE_URI_CONFIG));
-    confsToPublish.put(UNIQUE_IDENTIFIER, UNIQUE_ID.toString());
+    confsToPublish.put(UNIQUE_IDENTIFIER, uniqueId);
     // Transport mode
     confsToPublish.put(HiveConf.ConfVars.HIVE_SERVER2_TRANSPORT_MODE.varname,
       conf.get(HiveConf.ConfVars.HIVE_SERVER2_TRANSPORT_MODE.varname));
