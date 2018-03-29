@@ -38,7 +38,6 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
-import java.io.PrintStream;
 import java.io.Serializable;
 import java.io.Writer;
 import java.net.URI;
@@ -105,7 +104,7 @@ class SparkClientImpl implements SparkClient {
       // The RPC server will take care of timeouts here.
       this.driverRpc = rpcServer.registerClient(sessionid, secret, protocol).get();
     } catch (Throwable e) {
-      String errorMsg = null;
+      String errorMsg;
       if (e.getCause() instanceof TimeoutException) {
         errorMsg = "Timed out waiting for client to connect.\nPossible reasons include network " +
             "issues, errors in remote driver or the cluster has no available resources, etc." +
@@ -128,21 +127,18 @@ class SparkClientImpl implements SparkClient {
       throw Throwables.propagate(e);
     }
 
-    driverRpc.addListener(new Rpc.Listener() {
-        @Override
-        public void rpcClosed(Rpc rpc) {
-          if (isAlive) {
-            LOG.warn("Client RPC channel closed unexpectedly.");
-            isAlive = false;
-          }
-        }
+    driverRpc.addListener(rpc -> {
+      if (isAlive) {
+        LOG.warn("Client RPC channel closed unexpectedly.");
+        isAlive = false;
+      }
     });
     isAlive = true;
   }
 
   @Override
   public <T extends Serializable> JobHandle<T> submit(Job<T> job) {
-    return protocol.submit(job, Collections.<JobHandle.Listener<T>>emptyList());
+    return protocol.submit(job, Collections.emptyList());
   }
 
   @Override
@@ -296,11 +292,8 @@ class SparkClientImpl implements SparkClient {
       }
     }
 
-    Writer writer = new OutputStreamWriter(new FileOutputStream(properties), Charsets.UTF_8);
-    try {
+    try (Writer writer = new OutputStreamWriter(new FileOutputStream(properties), Charsets.UTF_8)) {
       allProps.store(writer, "Spark Context configuration");
-    } finally {
-      writer.close();
     }
 
     // Define how to pass options to the child process. If launching in client (or local)
@@ -371,32 +364,17 @@ class SparkClientImpl implements SparkClient {
       }
     }
 
-    // Added for support of Mesos
-    if(master.startsWith("mesos")){
+    if (master.startsWith("mesos") || master.startsWith("k8s")) {
       argv.add("--master");
       argv.add(master);
       argv.add("--deploy-mode");
       argv.add(deployMode);
       argv.add("--conf");
       argv.add("spark.ssl.noCertVerification=true");
-      String dockerImage = conf.getOrDefault("spark.docker.image", "lightbend/fdp-spark-for-hive:2.2.1");
-      argv.add("--conf");
-      argv.add("spark.mesos.executor.docker.image=" + dockerImage);
-      argv.add("--conf");
-      argv.add("spark.mesos.driver.labels=DCOS_SPACE:/spark");
-      argv.add("--conf");
-      argv.add("spark.mesos.task.labels=DCOS_SPACE:/spark");
-      argv.add("--conf");
-      argv.add("spark.mesos.role=*");
-
       argv.add("--conf");
       argv.add(SparkClientFactory.CONF_CLIENT_ID + "=" + clientId);
       argv.add("--conf");
       argv.add(SparkClientFactory.CONF_KEY_SECRET + "=" + secret);
-
-      argv.add("--conf");
-      argv.add("spark.mesos.executor.home=/opt/spark/dist");
-
 
       String executorCores = conf.get("spark.executor.cores");
       if (executorCores != null) {
@@ -413,7 +391,7 @@ class SparkClientImpl implements SparkClient {
       String driverMemory = conf.get("spark.driver.memory");
       if (driverMemory != null) {
         argv.add("--conf");
-        argv.add("driver.memory=" + driverMemory);
+        argv.add("spark.driver.memory=" + driverMemory);
       }
 
       String maxExecutorCores = conf.get("spark.cores.max");
@@ -444,7 +422,35 @@ class SparkClientImpl implements SparkClient {
 
       argv.add("--conf");
       argv.add("spark.kryo.classesToRegister=org.apache.hadoop.hive.ql.io.HiveKey,org.apache.hadoop.io.BytesWritable,org.apache.hadoop.hive.ql.exec.vector.VectorizedRowBatch");
+    }
 
+    if (master.startsWith("k8s")) {
+      for (String key: conf.keySet()) {
+        if (key.startsWith("spark.kubernetes.")) {
+          if (key.equals("spark.kubernetes.container.image")) {
+            String dockerImage = conf.getOrDefault(key, "lightbend/fdp-spark-for-hive:2.3.0-k8s");
+            argv.add("--conf");
+            argv.add("spark.kubernetes.container.image=" + dockerImage);
+            continue;
+          }
+          argv.add("--conf");
+          argv.add(key + "=" + conf.get(key));
+        }
+      }
+    }
+
+    if (master.startsWith("mesos")) {
+      String dockerImage = conf.getOrDefault("spark.docker.image", "lightbend/fdp-spark-for-hive:2.3.0-mesos");
+      argv.add("--conf");
+      argv.add("spark.mesos.executor.docker.image=" + dockerImage);
+      argv.add("--conf");
+      argv.add("spark.mesos.driver.labels=DCOS_SPACE:/spark");
+      argv.add("--conf");
+      argv.add("spark.mesos.task.labels=DCOS_SPACE:/spark");
+      argv.add("--conf");
+      argv.add("spark.mesos.role=*");
+      argv.add("--conf");
+      argv.add("spark.mesos.executor.home=/opt/spark/dist");
     }
 
     // The options --principal/--keypad do not work with --proxy-user in spark-submit.sh
@@ -498,11 +504,12 @@ class SparkClientImpl implements SparkClient {
       argv.add("--jars");
       jars.append(SparkClientUtilities.findKryoRegistratorJar(hiveConf));
     }
-    if (master.startsWith("mesos")){
-      String extras = conf.getOrDefault("spark.hive.executor.jars", "");
+    if (master.startsWith("mesos") || master.startsWith("k8s")){
+      String extras = conf.getOrDefault("spark.hive.dependency.jars", "");
       if(extras.length() > 0) {
-        if (jars.length() > 0)
+        if (jars.length() > 0) {
           jars.append(",");
+        }
         jars.append(extras);
       }
     }
@@ -514,10 +521,11 @@ class SparkClientImpl implements SparkClient {
     argv.add("--class");
     argv.add(RemoteDriver.class.getName());
 
-    if (master.startsWith("mesos")){
-      argv.add(conf.getOrDefault("spark.hive.jar.location", "http://hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar"));
+    if (master.startsWith("mesos") || master.startsWith("k8s")) {
+      argv.add(conf.getOrDefault("spark.hive.jar", "http://hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar"));
     }
-    else {
+
+    if (!master.startsWith("mesos") && !master.startsWith("k8s")) {
       String jar = "spark-internal";
       if (SparkContext.jarOfClass(this.getClass()).isDefined()) {
         jar = SparkContext.jarOfClass(this.getClass()).get();
@@ -560,42 +568,38 @@ class SparkClientImpl implements SparkClient {
     final Process child = pb.start();
     String threadName = Thread.currentThread().getName();
     final List<String> childErrorLog = Collections.synchronizedList(new ArrayList<String>());
-    final LogRedirector.LogSourceCallback callback = () -> {return isAlive;};
+    final LogRedirector.LogSourceCallback callback = () -> isAlive;
 
     LogRedirector.redirect("RemoteDriver-stdout-redir-" + threadName,
         new LogRedirector(child.getInputStream(), LOG, callback));
     LogRedirector.redirect("RemoteDriver-stderr-redir-" + threadName,
         new LogRedirector(child.getErrorStream(), LOG, childErrorLog, callback));
 
-    runnable = new Runnable() {
-      @Override
-      public void run() {
-        try {
-          int exitCode = child.waitFor();
-          if (exitCode != 0) {
-            StringBuilder errStr = new StringBuilder();
-            synchronized(childErrorLog) {
-              Iterator iter = childErrorLog.iterator();
-              while(iter.hasNext()){
-                errStr.append(iter.next());
-                errStr.append('\n');
-              }
+    runnable = () -> {
+      try {
+        int exitCode = child.waitFor();
+        if (exitCode != 0) {
+          StringBuilder errStr = new StringBuilder();
+          synchronized(childErrorLog) {
+            for (Object aChildErrorLog : childErrorLog) {
+              errStr.append(aChildErrorLog);
+              errStr.append('\n');
             }
-
-            LOG.warn("Child process exited with code {}", exitCode);
-            rpcServer.cancelClient(clientId,
-                "Child process (spark-submit) exited before connecting back with error log " + errStr.toString());
           }
-        } catch (InterruptedException ie) {
-          LOG.warn("Thread waiting on the child process (spark-submit) is interrupted, killing the child process.");
-          rpcServer.cancelClient(clientId, "Thread waiting on the child porcess (spark-submit) is interrupted");
-          Thread.interrupted();
-          child.destroy();
-        } catch (Exception e) {
-          String errMsg = "Exception while waiting for child process (spark-submit)";
-          LOG.warn(errMsg, e);
-          rpcServer.cancelClient(clientId, errMsg);
+
+          LOG.warn("Child process exited with code {}", exitCode);
+          rpcServer.cancelClient(clientId,
+              "Child process (spark-submit) exited before connecting back with error log " + errStr.toString());
         }
+      } catch (InterruptedException ie) {
+        LOG.warn("Thread waiting on the child process (spark-submit) is interrupted, killing the child process.");
+        rpcServer.cancelClient(clientId, "Thread waiting on the child porcess (spark-submit) is interrupted");
+        Thread.interrupted();
+        child.destroy();
+      } catch (Exception e) {
+        String errMsg = "Exception while waiting for child process (spark-submit)";
+        LOG.warn(errMsg, e);
+        rpcServer.cancelClient(clientId, errMsg);
       }
     };
 
@@ -629,26 +633,20 @@ class SparkClientImpl implements SparkClient {
 
       // Link the RPC and the promise so that events from one are propagated to the other as
       // needed.
-      rpc.addListener(new GenericFutureListener<io.netty.util.concurrent.Future<Void>>() {
-        @Override
-        public void operationComplete(io.netty.util.concurrent.Future<Void> f) {
-          if (f.isSuccess()) {
-            // If the spark job finishes before this listener is called, the QUEUED status will not be set
-            handle.changeState(JobHandle.State.QUEUED);
-          } else if (!promise.isDone()) {
-            promise.setFailure(f.cause());
-          }
+      rpc.addListener((GenericFutureListener<io.netty.util.concurrent.Future<Void>>) f -> {
+        if (f.isSuccess()) {
+          // If the spark job finishes before this listener is called, the QUEUED status will not be set
+          handle.changeState(JobHandle.State.QUEUED);
+        } else if (!promise.isDone()) {
+          promise.setFailure(f.cause());
         }
       });
-      promise.addListener(new GenericFutureListener<Promise<T>>() {
-        @Override
-        public void operationComplete(Promise<T> p) {
-          if (jobId != null) {
-            jobs.remove(jobId);
-          }
-          if (p.isCancelled() && !rpc.isDone()) {
-            rpc.cancel(true);
-          }
+      promise.addListener((GenericFutureListener<Promise<T>>) p -> {
+        if (jobId != null) {
+          jobs.remove(jobId);
+        }
+        if (p.isCancelled() && !rpc.isDone()) {
+          rpc.cancel(true);
         }
       });
       return handle;
@@ -770,7 +768,7 @@ class SparkClientImpl implements SparkClient {
       public Integer call(JobContext jc) throws Exception {
         // minus 1 here otherwise driver is also counted as an executor
         int count = jc.sc().sc().getExecutorMemoryStatus().size() - 1;
-        return Integer.valueOf(count);
+        return count;
       }
 
   }

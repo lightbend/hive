@@ -5390,17 +5390,17 @@
   </property>
   <property>
     <name>spark.docker.image</name>
-    <value>lightbend/fdp-spark-for-hive:2.2.1</value>
-    <description>Spark docker image to use</description>
+    <value>lightbend/fdp-spark-for-hive:2.3.0-mesos</value>
+    <description>Spark on Mesos docker image to use in executors</description>
   </property>
   <property>
-    <name>spark.hive.jar.location</name>
+    <name>spark.hive.jar</name>
     <value>http://hive-on-spark.marathon.mesos/hive-exec-3.0.0-SNAPSHOT.jar</value>
     <description>URL accessible Hive jar</description>
   </property>
   <property>
-    <name>spark.hive.executor.jars</name>
-    <value>/home/admin/exercises/lib/hive-json-serde-0.3.jar</value>
+    <name>spark.hive.dependency.jars</name>
+    <value></value>
     <description>Comma-separated list of jars to be distributed to Spark executors</description>
   </property>
   <property>

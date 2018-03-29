@@ -114,24 +114,23 @@ What is special about this version
 
 This version of Hive has modified `org.apache.hive.spark.client.SparkClientImpl` in `spark-client` module. Modifications are numerous (compare to the [original](https://github.com/apache/hive/blob/master/spark-client/src/main/java/org/apache/hive/spark/client/SparkClientImpl.java)).
 
-These changes enable the usage of Spark on Mesos as the execution engine for Hive.
-Make sure that `spark.version` is set correctly at [pom file](./pom.xml).
+These changes enable the usage of Spark on Mesos and Spark on Kubernetes as the execution engine for Hive. Spark 2.3.0 is the supported version of Spark.
 
 Here is a quick usage sample (also look at [Hive on Spark getting Started](https://cwiki.apache.org/confluence/display/Hive/Hive+on+Spark%3A+Getting+Started))
 
 * Build Hive using `mvn clean package -Pdist -DskipTests`. The results of the build are at `packaging/target`
 * Make sure that Spark that you are using is build without Hive - 
 ````
-./dev/make-distribution.sh --name spark-without-hive --pip --tgz -Pmesos -Phadoop-2.6 -DskipTests
+./dev/make-distribution.sh --name spark-without-hive --pip --tgz -Pmesos -Pkubernetes -Phadoop-2.6 -DskipTests
 ````
 
 This version of Spark is built without Hive and R. 
-* Make sure you can successfully run a Spark job by running:
+* Make sure you can successfully run a Spark job in Mesos by running:
 ````shell
 spark-submit \
 	--master mesos://spark.marathon.mesos:<port-of-dcos-spark-instance>  \
 	--deploy-mode cluster  \
-	--conf spark.mesos.executor.docker.image=lightbend/fdp-spark-for-hive:2.2.1  \
+	--conf spark.mesos.executor.docker.image=lightbend/fdp-spark-for-hive:2.3.0-mesos  \
 	--conf spark.mesos.driver.labels=DCOS_SPACE:/spark  \
 	--conf spark.mesos.task.labels=DCOS_SPACE:/spark  \
 	--conf spark.executor.cores=2  \
