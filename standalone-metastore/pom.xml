@@ -583,7 +583,7 @@
               <goal>run</goal>
             </goals>
             <configuration>
-              <protocVersion>2.5.0</protocVersion>
+              <protocArtifact>com.google.protobuf:protoc:2.5.0</protocArtifact>
               <addSources>none</addSources>
               <inputDirectories>
                 <include>${basedir}/src/main/protobuf/org/apache/hadoop/hive/metastore</include>
@@ -680,6 +680,9 @@
         <version>0.10</version>
         <configuration>
           <excludes>
+	    <exclude>binary-package-licenses/**</exclude>
+            <exclude>DEV-README</exclude>
+	    <exclude>**/src/main/sql/**</exclude>
             <exclude>**/README.md</exclude>
             <exclude>**/*.iml</exclude>
             <exclude>**/*.txt</exclude>

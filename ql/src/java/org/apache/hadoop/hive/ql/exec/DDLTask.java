@@ -19,6 +19,7 @@
 package org.apache.hadoop.hive.ql.exec;
 
 import static org.apache.commons.lang.StringUtils.join;
+import static org.apache.hadoop.hive.metastore.Warehouse.DEFAULT_CATALOG_NAME;
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_STORAGE;
 
 import java.io.BufferedWriter;
@@ -71,6 +72,7 @@ import org.apache.hadoop.hive.conf.HiveConf.ConfVars;
 import org.apache.hadoop.hive.metastore.DefaultHiveMetaHook;
 import org.apache.hadoop.hive.metastore.HiveMetaHook;
 import org.apache.hadoop.hive.metastore.HiveMetaStoreUtils;
+import org.apache.hadoop.hive.metastore.IMetaStoreClient;
 import org.apache.hadoop.hive.metastore.PartitionDropOptions;
 import org.apache.hadoop.hive.metastore.StatObjectConverter;
 import org.apache.hadoop.hive.metastore.TableType;
@@ -112,6 +114,7 @@ import org.apache.hadoop.hive.metastore.api.WMNullableResourcePlan;
 import org.apache.hadoop.hive.metastore.api.WMResourcePlanStatus;
 import org.apache.hadoop.hive.metastore.api.WMTrigger;
 import org.apache.hadoop.hive.metastore.api.WMValidateResourcePlanResponse;
+import org.apache.hadoop.hive.metastore.conf.MetastoreConf;
 import org.apache.hadoop.hive.metastore.txn.TxnStore;
 import org.apache.hadoop.hive.metastore.utils.MetaStoreUtils;
 import org.apache.hadoop.hive.ql.CompilationOpContext;
@@ -3822,10 +3825,12 @@ public class DDLTask extends Task<DDLWork> implements Serializable {
     }
 
     try {
+      EnvironmentContext environmentContext = alterTbl.getEnvironmentContext();
+      environmentContext.putToProperties(HiveMetaHook.ALTER_TABLE_OPERATION_TYPE, alterTbl.getOp().name());
       if (allPartitions == null) {
-        db.alterTable(alterTbl.getOldName(), tbl, alterTbl.getIsCascade(), alterTbl.getEnvironmentContext());
+        db.alterTable(alterTbl.getOldName(), tbl, alterTbl.getIsCascade(), environmentContext);
       } else {
-        db.alterPartitions(Warehouse.getQualifiedName(tbl.getTTable()), allPartitions, alterTbl.getEnvironmentContext());
+        db.alterPartitions(Warehouse.getQualifiedName(tbl.getTTable()), allPartitions, environmentContext);
       }
       // Add constraints if necessary
       addConstraints(db, alterTbl);
@@ -4219,6 +4224,8 @@ public class DDLTask extends Task<DDLWork> implements Serializable {
         }
         tbl.setNumBuckets(alterTbl.getNumberBuckets());
       }
+    } else if (alterTbl.getOp() == AlterTableTypes.UPDATECOLUMNS) {
+      updateColumns(tbl, part);
     } else {
       throw new HiveException(ErrorMsg.UNSUPPORTED_ALTER_TBL_OP, alterTbl.getOp().toString());
     }
@@ -4443,6 +4450,29 @@ public class DDLTask extends Task<DDLWork> implements Serializable {
     } catch (NoSuchObjectException e) {
       throw new HiveException(e);
     }
+    return 0;
+  }
+
+  private int updateColumns(Table tbl, Partition part)
+          throws HiveException {
+    String serializationLib = tbl.getSd().getSerdeInfo().getSerializationLib();
+    if (MetastoreConf.getStringCollection(conf,
+            MetastoreConf.ConfVars.SERDES_USING_METASTORE_FOR_SCHEMA).contains(serializationLib)) {
+      throw new HiveException(tbl.getTableName() + " has serde " + serializationLib + " for which schema " +
+              "is already handled by HMS.");
+    }
+    Deserializer deserializer = tbl.getDeserializer(true);
+    try {
+      LOG.info("Updating metastore columns for table: {}", tbl.getTableName());
+      final List<FieldSchema> fields = HiveMetaStoreUtils.getFieldsFromDeserializer(
+              tbl.getTableName(), deserializer);
+      StorageDescriptor sd = retrieveStorageDescriptor(tbl, part);
+      sd.setCols(fields);
+    } catch (org.apache.hadoop.hive.serde2.SerDeException | MetaException e) {
+      LOG.error("alter table update columns: {}", e);
+      throw new HiveException(e, ErrorMsg.GENERIC_ERROR);
+    }
+
     return 0;
   }
 
@@ -5025,8 +5055,8 @@ public class DDLTask extends Task<DDLWork> implements Serializable {
       // We set the signature for the view if it is a materialized view
       if (tbl.isMaterializedView()) {
         CreationMetadata cm =
-            new CreationMetadata(tbl.getDbName(), tbl.getTableName(),
-                ImmutableSet.copyOf(crtView.getTablesUsed()));
+            new CreationMetadata(MetaStoreUtils.getDefaultCatalog(conf), tbl.getDbName(),
+                tbl.getTableName(), ImmutableSet.copyOf(crtView.getTablesUsed()));
         cm.setValidTxnList(conf.get(ValidTxnList.VALID_TXNS_KEY));
         tbl.getTTable().setCreationMetadata(cm);
       }
