@@ -135,19 +135,19 @@ public class TestRpc {
     // Test if rpc_server_address is configured
     config.put(HiveConf.ConfVars.SPARK_RPC_SERVER_ADDRESS.varname, hostAddress);
     RpcServer server1 = autoClose(new RpcServer(config));
-    assertTrue("Host address should match the expected one", server1.getAddress() == hostAddress);
+    assertTrue("Host address should match the expected one", server1.getAddress().equalsIgnoreCase(hostAddress));
 
     // Test if rpc_server_address is not configured but HS2 server host is configured
     config.put(HiveConf.ConfVars.SPARK_RPC_SERVER_ADDRESS.varname, "");
     config.put(HiveConf.ConfVars.HIVE_SERVER2_THRIFT_BIND_HOST.varname, hostAddress);
     RpcServer server2 = autoClose(new RpcServer(config));
-    assertTrue("Host address should match the expected one", server2.getAddress() == hostAddress);
+    assertTrue("Host address should match the expected one", server2.getAddress().equalsIgnoreCase(hostAddress));
 
     // Test if both are not configured
     config.put(HiveConf.ConfVars.SPARK_RPC_SERVER_ADDRESS.varname, "");
     config.put(HiveConf.ConfVars.HIVE_SERVER2_THRIFT_BIND_HOST.varname, "");
     RpcServer server3 = autoClose(new RpcServer(config));
-    assertTrue("Host address should match the expected one", server3.getAddress() == InetAddress.getLocalHost().getHostName());
+    assertTrue("Host address should match the expected one", server3.getAddress().equalsIgnoreCase(InetAddress.getLocalHost().getHostName()));
   }
 
   @Test
