@@ -46,6 +46,8 @@ import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.hive.common.JavaUtils;
+import org.apache.hadoop.hive.common.ValidCompactorWriteIdList;
+import org.apache.hadoop.hive.common.ValidReaderWriteIdList;
 import org.apache.hadoop.hive.common.ValidTxnList;
 import org.apache.hadoop.hive.common.ValidTxnWriteIdList;
 import org.apache.hadoop.hive.common.ValidWriteIdList;
@@ -61,6 +63,8 @@ import org.apache.hadoop.hive.metastore.HiveMetaStoreUtils;
 import org.apache.hadoop.hive.metastore.api.Database;
 import org.apache.hadoop.hive.metastore.api.FieldSchema;
 import org.apache.hadoop.hive.metastore.api.Schema;
+import org.apache.hadoop.hive.metastore.api.TableValidWriteIds;
+import org.apache.hadoop.hive.metastore.txn.TxnUtils;
 import org.apache.hadoop.hive.ql.cache.results.CacheUsage;
 import org.apache.hadoop.hive.ql.cache.results.QueryResultsCache;
 import org.apache.hadoop.hive.ql.cache.results.QueryResultsCache.CacheEntry;
@@ -113,6 +117,7 @@ import org.apache.hadoop.hive.ql.parse.ParseUtils;
 import org.apache.hadoop.hive.ql.parse.PrunedPartitionList;
 import org.apache.hadoop.hive.ql.parse.SemanticAnalyzer;
 import org.apache.hadoop.hive.ql.parse.SemanticAnalyzerFactory;
+import org.apache.hadoop.hive.ql.plan.DDLDesc.DDLDescWithWriteId;
 import org.apache.hadoop.hive.ql.plan.FileSinkDesc;
 import org.apache.hadoop.hive.ql.plan.HiveOperation;
 import org.apache.hadoop.hive.ql.plan.TableDesc;
@@ -208,6 +213,7 @@ public class Driver implements IDriver {
 
   private CacheUsage cacheUsage;
   private CacheEntry usedCacheEntry;
+  private ValidWriteIdList compactionWriteIds = null;
 
   private enum DriverState {
     INITIALIZED,
@@ -540,8 +546,10 @@ public class Driver implements IDriver {
 
     conf.setQueryString(queryStr);
     // FIXME: sideeffect will leave the last query set at the session level
-    SessionState.get().getConf().setQueryString(queryStr);
-    SessionState.get().setupQueryCurrentTimestamp();
+    if (SessionState.get() != null) {
+      SessionState.get().getConf().setQueryString(queryStr);
+      SessionState.get().setupQueryCurrentTimestamp();
+    }
 
     // Whether any error occurred during query compilation. Used for query lifetime hook.
     boolean compileError = false;
@@ -584,6 +592,7 @@ public class Driver implements IDriver {
         setTriggerContext(queryId);
       }
 
+      ctx.setHiveTxnManager(queryTxnMgr);
       ctx.setStatsSource(statsSource);
       ctx.setCmd(command);
       ctx.setHDFSCleanup(true);
@@ -1308,7 +1317,18 @@ public class Driver implements IDriver {
       throw new IllegalStateException("calling recordValidWritsIdss() without initializing ValidTxnList " +
               JavaUtils.txnIdToString(txnMgr.getCurrentTxnId()));
     }
-    ValidTxnWriteIdList txnWriteIds = txnMgr.getValidWriteIds(getTransactionalTableList(plan), txnString);
+    List<String> txnTables = getTransactionalTableList(plan);
+    ValidTxnWriteIdList txnWriteIds = null;
+    if (compactionWriteIds != null) {
+      if (txnTables.size() != 1) {
+        throw new LockException("Unexpected tables in compaction: " + txnTables);
+      }
+      String fullTableName = txnTables.get(0);
+      txnWriteIds = new ValidTxnWriteIdList(0L); // No transaction for the compaction for now.
+      txnWriteIds.addTableValidWriteIdList(compactionWriteIds);
+    } else {
+      txnWriteIds = txnMgr.getValidWriteIds(txnTables, txnString);
+    }
     String writeIdStr = txnWriteIds.toString();
     conf.set(ValidTxnWriteIdList.VALID_TABLES_WRITEIDS_KEY, writeIdStr);
     if (plan.getFetchTask() != null) {
@@ -1412,8 +1432,9 @@ public class Driver implements IDriver {
       if(userFromUGI == null) {
         throw createProcessorResponse(10);
       }
+
       // Set the table write id in all of the acid file sinks
-      if (haveAcidWrite()) {
+      if (!plan.getAcidSinks().isEmpty()) {
         List<FileSinkDesc> acidSinks = new ArrayList<>(plan.getAcidSinks());
         //sorting makes tests easier to write since file names and ROW__IDs depend on statementId
         //so this makes (file name -> data) mapping stable
@@ -1430,6 +1451,18 @@ public class Driver implements IDriver {
           desc.setStatementId(queryTxnMgr.getStmtIdAndIncrement());
         }
       }
+
+      // Note: the sinks and DDL cannot coexist at this time; but if they could we would
+      //       need to make sure we don't get two write IDs for the same table.
+      DDLDescWithWriteId acidDdlDesc = plan.getAcidDdlDesc();
+      if (acidDdlDesc != null && acidDdlDesc.mayNeedWriteId()) {
+        String fqTableName = acidDdlDesc.getFullTableName();
+        long writeId = queryTxnMgr.getTableWriteId(
+            Utilities.getDatabaseName(fqTableName), Utilities.getTableName(fqTableName));
+        acidDdlDesc.setWriteId(writeId);
+      }
+
+
       /*It's imperative that {@code acquireLocks()} is called for all commands so that
       HiveTxnManager can transition its state machine correctly*/
       queryTxnMgr.acquireLocks(plan, ctx, userFromUGI, lDrvState);
@@ -1451,10 +1484,6 @@ public class Driver implements IDriver {
     } finally {
       perfLogger.PerfLogEnd(CLASS_NAME, PerfLogger.ACQUIRE_READ_WRITE_LOCKS);
     }
-  }
-
-  private boolean haveAcidWrite() {
-    return !plan.getAcidSinks().isEmpty();
   }
 
   public void releaseLocksAndCommitOrRollback(boolean commit) throws LockException {
@@ -1883,7 +1912,7 @@ public class Driver implements IDriver {
       return false;
     }
     // Lock operations themselves don't require the lock.
-    if (isExplicitLockOperation()){
+    if (isExplicitLockOperation()) {
       return false;
     }
     if (!HiveConf.getBoolVar(conf, ConfVars.HIVE_LOCK_MAPRED_ONLY)) {
@@ -1949,10 +1978,14 @@ public class Driver implements IDriver {
     if (cacheUsage != null) {
       if (cacheUsage.getStatus() == CacheUsage.CacheStatus.CAN_CACHE_QUERY_RESULTS &&
           plan.getFetchTask() != null) {
+        ValidTxnWriteIdList txnWriteIdList = null;
+        if (plan.hasAcidResourcesInQuery()) {
+          txnWriteIdList = AcidUtils.getValidTxnWriteIdList(conf);
+        }
         // The results of this query execution might be cacheable.
         // Add a placeholder entry in the cache so other queries know this result is pending.
         CacheEntry pendingCacheEntry =
-            QueryResultsCache.getInstance().addToCache(cacheUsage.getQueryInfo());
+            QueryResultsCache.getInstance().addToCache(cacheUsage.getQueryInfo(), txnWriteIdList);
         if (pendingCacheEntry != null) {
           // Update cacheUsage to reference the pending entry.
           this.cacheUsage.setCacheEntry(pendingCacheEntry);
@@ -1977,6 +2010,10 @@ public class Driver implements IDriver {
         PerfLogger perfLogger = SessionState.getPerfLogger();
         perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.SAVE_TO_RESULTS_CACHE);
 
+        ValidTxnWriteIdList txnWriteIdList = null;
+        if (plan.hasAcidResourcesInQuery()) {
+          txnWriteIdList = AcidUtils.getValidTxnWriteIdList(conf);
+        }
         boolean savedToCache = QueryResultsCache.getInstance().setEntryValid(
             cacheUsage.getCacheEntry(),
             plan.getFetchTask().getWork());
@@ -2107,7 +2144,6 @@ public class Driver implements IDriver {
       perfLogger.PerfLogBegin(CLASS_NAME, PerfLogger.RUN_TASKS);
       // Loop while you either have tasks running, or tasks queued up
       while (driverCxt.isRunning()) {
-
         // Launch upto maxthreads tasks
         Task<? extends Serializable> task;
         while ((task = driverCxt.getRunnable(maxthreads)) != null) {
@@ -2740,6 +2776,10 @@ public class Driver implements IDriver {
     this.statsSource = runtimeStatsSource;
   }
 
+  public StatsSource getStatsSource() {
+    return statsSource;
+  }
+
   @Override
   public boolean hasResultSet() {
 
@@ -2754,5 +2794,9 @@ public class Driver implements IDriver {
     } else {
       return false;
     }
+  }
+
+  public void setCompactionWriteIds(ValidWriteIdList val) {
+    this.compactionWriteIds = val;
   }
 }

@@ -460,6 +460,10 @@ public enum ErrorMsg {
   LOAD_DATA_ACID_FILE(10413,
       "\"{0}\" was created created by Acid write - it cannot be loaded into anther Acid table",
       true),
+  ACID_OP_ON_INSERTONLYTRAN_TABLE(10414, "Attempt to do update or delete on table {0} that is " +
+    "insert-only transactional", true),
+  LOAD_DATA_LAUNCH_JOB_IO_ERROR(10415, "Encountered I/O error while parsing rewritten load data into insert query"),
+  LOAD_DATA_LAUNCH_JOB_PARSE_ERROR(10416, "Encountered parse error while parsing rewritten load data into insert query"),
 
 
   //========================== 20000 range starts here ========================//

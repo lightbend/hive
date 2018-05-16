@@ -22,7 +22,9 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.metastore.DefaultStorageSchemaReader;
 import org.apache.hadoop.hive.metastore.HiveAlterHandler;
 import org.apache.hadoop.hive.metastore.MaterializationsCacheCleanerTask;
+import org.apache.hadoop.hive.metastore.MaterializationsRebuildLockCleanerTask;
 import org.apache.hadoop.hive.metastore.MetastoreTaskThread;
+import org.apache.hadoop.hive.metastore.RuntimeStatsCleanerTask;
 import org.apache.hadoop.hive.metastore.events.EventCleanerTask;
 import org.apache.hadoop.hive.metastore.security.MetastoreDelegationTokenManager;
 import org.apache.hadoop.hive.metastore.txn.AcidCompactionHistoryService;
@@ -300,6 +302,11 @@ public class MetastoreConf {
          "This can be used in conjunction with hive.metastore.cached.rawstore.cached.object.whitelist. \n" +
          "Example: db2.*, db3\\.tbl1, db3\\..*. The last item can potentially override patterns specified before. \n" +
          "The blacklist also overrides the whitelist."),
+    CACHED_RAW_STORE_MAX_CACHE_MEMORY("metastore.cached.rawstore.max.cache.memory",
+        "hive.metastore.cached.rawstore.max.cache.memory", "1Gb", new SizeValidator(),
+        "The maximum memory in bytes that the cached objects can use. "
+        + "Memory used is calculated based on estimated size of tables and partitions in the cache. "
+        + "Setting it to a negative value disables memory estimation."),
     CAPABILITY_CHECK("metastore.client.capability.check",
         "hive.metastore.client.capability.check", true,
         "Whether to check client capabilities for potentially breaking API usage."),
@@ -571,6 +578,12 @@ public class MetastoreConf {
          "hive.metastore.materializations.invalidation.max.duration",
          86400, TimeUnit.SECONDS, "Maximum duration for query producing a materialization. After this time, transaction" +
          "entries that are not relevant for materializations can be removed from invalidation cache."),
+
+    RUNTIME_STATS_CLEAN_FREQUENCY("runtime.stats.clean.frequency", "hive.metastore.runtime.stats.clean.frequency", 3600,
+        TimeUnit.SECONDS, "Frequency at which timer task runs to remove outdated runtime stat entries."),
+    RUNTIME_STATS_MAX_AGE("runtime.stats.max.age", "hive.metastore.runtime.stats.max.age", 86400 * 3, TimeUnit.SECONDS,
+        "Stat entries which are older than this are removed."),
+
     // Parameters for exporting metadata on table drop (requires the use of the)
     // org.apache.hadoop.hive.ql.parse.MetaDataExportListener preevent listener
     METADATA_EXPORT_LOCATION("metastore.metadata.export.location", "hive.metadata.export.location",
@@ -726,9 +739,10 @@ public class MetastoreConf {
             + "The only supported special character right now is '/'. This flag applies only to quoted table names.\n"
             + "The default value is true."),
     TASK_THREADS_ALWAYS("metastore.task.threads.always", "metastore.task.threads.always",
-        EventCleanerTask.class.getName() + "," +
+        EventCleanerTask.class.getName() + "," + RuntimeStatsCleanerTask.class.getName() + "," +
         "org.apache.hadoop.hive.metastore.repl.DumpDirCleanerTask" + "," +
-        MaterializationsCacheCleanerTask.class.getName(),
+        MaterializationsCacheCleanerTask.class.getName() + "," +
+            MaterializationsRebuildLockCleanerTask.class.getName() + "," + RuntimeStatsCleanerTask.class.getName(),
         "Comma separated list of tasks that will be started in separate threads.  These will " +
             "always be started, regardless of whether the metastore is running in embedded mode " +
             "or in server mode.  They must implement " + MetastoreTaskThread.class.getName()),
@@ -1118,16 +1132,22 @@ public class MetastoreConf {
        */
       hiveSiteURL = findConfigFile(classLoader, "hive-site.xml");
     }
-    if (hiveSiteURL != null) conf.addResource(hiveSiteURL);
+    if (hiveSiteURL != null) {
+      conf.addResource(hiveSiteURL);
+    }
 
     // Now add hivemetastore-site.xml.  Again we add this before our own config files so that the
     // newer overrides the older.
     hiveMetastoreSiteURL = findConfigFile(classLoader, "hivemetastore-site.xml");
-    if (hiveMetastoreSiteURL != null) conf.addResource(hiveMetastoreSiteURL);
+    if (hiveMetastoreSiteURL != null) {
+      conf.addResource(hiveMetastoreSiteURL);
+    }
 
     // Add in our conf file
     metastoreSiteURL = findConfigFile(classLoader, "metastore-site.xml");
-    if (metastoreSiteURL !=  null) conf.addResource(metastoreSiteURL);
+    if (metastoreSiteURL !=  null) {
+      conf.addResource(metastoreSiteURL);
+    }
 
     // If a system property that matches one of our conf value names is set then use the value
     // it's set to to set our own conf value.
@@ -1259,8 +1279,12 @@ public class MetastoreConf {
   public static Collection<String> getStringCollection(Configuration conf, ConfVars var) {
     assert var.defaultVal.getClass() == String.class;
     String val = conf.get(var.varname);
-    if (val == null) val = conf.get(var.hiveName, (String)var.defaultVal);
-    if (val == null) return Collections.emptySet();
+    if (val == null) {
+      val = conf.get(var.hiveName, (String)var.defaultVal);
+    }
+    if (val == null) {
+      return Collections.emptySet();
+    }
     return StringUtils.asSet(val.split(","));
   }
 
@@ -1355,6 +1379,10 @@ public class MetastoreConf {
   public static void setDoubleVar(Configuration conf, ConfVars var, double val) {
     assert var.defaultVal.getClass() == Double.class;
     conf.setDouble(var.varname, val);
+  }
+
+  public static long getSizeVar(Configuration conf, ConfVars var) {
+    return SizeValidator.toSizeBytes(getVar(conf, var));
   }
 
   /**
@@ -1624,5 +1652,4 @@ public class MetastoreConf {
     buf.append("Finished MetastoreConf object.\n");
     return buf.toString();
   }
-
 }

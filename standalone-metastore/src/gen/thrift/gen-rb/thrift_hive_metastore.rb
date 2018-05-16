@@ -2161,6 +2161,22 @@ module ThriftHiveMetastore
       raise ::Thrift::ApplicationException.new(::Thrift::ApplicationException::MISSING_RESULT, 'grant_revoke_privileges failed: unknown result')
     end
 
+    def refresh_privileges(objToRefresh, grantRequest)
+      send_refresh_privileges(objToRefresh, grantRequest)
+      return recv_refresh_privileges()
+    end
+
+    def send_refresh_privileges(objToRefresh, grantRequest)
+      send_message('refresh_privileges', Refresh_privileges_args, :objToRefresh => objToRefresh, :grantRequest => grantRequest)
+    end
+
+    def recv_refresh_privileges()
+      result = receive_message(Refresh_privileges_result)
+      return result.success unless result.success.nil?
+      raise result.o1 unless result.o1.nil?
+      raise ::Thrift::ApplicationException.new(::Thrift::ApplicationException::MISSING_RESULT, 'refresh_privileges failed: unknown result')
+    end
+
     def set_ugi(user_name, group_names)
       send_set_ugi(user_name, group_names)
       return recv_set_ugi()
@@ -2434,6 +2450,20 @@ module ThriftHiveMetastore
       result = receive_message(Commit_txn_result)
       raise result.o1 unless result.o1.nil?
       raise result.o2 unless result.o2.nil?
+      return
+    end
+
+    def repl_tbl_writeid_state(rqst)
+      send_repl_tbl_writeid_state(rqst)
+      recv_repl_tbl_writeid_state()
+    end
+
+    def send_repl_tbl_writeid_state(rqst)
+      send_message('repl_tbl_writeid_state', Repl_tbl_writeid_state_args, :rqst => rqst)
+    end
+
+    def recv_repl_tbl_writeid_state()
+      result = receive_message(Repl_tbl_writeid_state_result)
       return
     end
 
@@ -3346,6 +3376,67 @@ module ThriftHiveMetastore
       raise result.o1 unless result.o1.nil?
       raise result.o2 unless result.o2.nil?
       raise ::Thrift::ApplicationException.new(::Thrift::ApplicationException::MISSING_RESULT, 'get_serde failed: unknown result')
+    end
+
+    def get_lock_materialization_rebuild(dbName, tableName, txnId)
+      send_get_lock_materialization_rebuild(dbName, tableName, txnId)
+      return recv_get_lock_materialization_rebuild()
+    end
+
+    def send_get_lock_materialization_rebuild(dbName, tableName, txnId)
+      send_message('get_lock_materialization_rebuild', Get_lock_materialization_rebuild_args, :dbName => dbName, :tableName => tableName, :txnId => txnId)
+    end
+
+    def recv_get_lock_materialization_rebuild()
+      result = receive_message(Get_lock_materialization_rebuild_result)
+      return result.success unless result.success.nil?
+      raise ::Thrift::ApplicationException.new(::Thrift::ApplicationException::MISSING_RESULT, 'get_lock_materialization_rebuild failed: unknown result')
+    end
+
+    def heartbeat_lock_materialization_rebuild(dbName, tableName, txnId)
+      send_heartbeat_lock_materialization_rebuild(dbName, tableName, txnId)
+      return recv_heartbeat_lock_materialization_rebuild()
+    end
+
+    def send_heartbeat_lock_materialization_rebuild(dbName, tableName, txnId)
+      send_message('heartbeat_lock_materialization_rebuild', Heartbeat_lock_materialization_rebuild_args, :dbName => dbName, :tableName => tableName, :txnId => txnId)
+    end
+
+    def recv_heartbeat_lock_materialization_rebuild()
+      result = receive_message(Heartbeat_lock_materialization_rebuild_result)
+      return result.success unless result.success.nil?
+      raise ::Thrift::ApplicationException.new(::Thrift::ApplicationException::MISSING_RESULT, 'heartbeat_lock_materialization_rebuild failed: unknown result')
+    end
+
+    def add_runtime_stats(stat)
+      send_add_runtime_stats(stat)
+      recv_add_runtime_stats()
+    end
+
+    def send_add_runtime_stats(stat)
+      send_message('add_runtime_stats', Add_runtime_stats_args, :stat => stat)
+    end
+
+    def recv_add_runtime_stats()
+      result = receive_message(Add_runtime_stats_result)
+      raise result.o1 unless result.o1.nil?
+      return
+    end
+
+    def get_runtime_stats(rqst)
+      send_get_runtime_stats(rqst)
+      return recv_get_runtime_stats()
+    end
+
+    def send_get_runtime_stats(rqst)
+      send_message('get_runtime_stats', Get_runtime_stats_args, :rqst => rqst)
+    end
+
+    def recv_get_runtime_stats()
+      result = receive_message(Get_runtime_stats_result)
+      return result.success unless result.success.nil?
+      raise result.o1 unless result.o1.nil?
+      raise ::Thrift::ApplicationException.new(::Thrift::ApplicationException::MISSING_RESULT, 'get_runtime_stats failed: unknown result')
     end
 
   end
@@ -5046,6 +5137,17 @@ module ThriftHiveMetastore
       write_result(result, oprot, 'grant_revoke_privileges', seqid)
     end
 
+    def process_refresh_privileges(seqid, iprot, oprot)
+      args = read_args(iprot, Refresh_privileges_args)
+      result = Refresh_privileges_result.new()
+      begin
+        result.success = @handler.refresh_privileges(args.objToRefresh, args.grantRequest)
+      rescue ::MetaException => o1
+        result.o1 = o1
+      end
+      write_result(result, oprot, 'refresh_privileges', seqid)
+    end
+
     def process_set_ugi(seqid, iprot, oprot)
       args = read_args(iprot, Set_ugi_args)
       result = Set_ugi_result.new()
@@ -5210,6 +5312,13 @@ module ThriftHiveMetastore
         result.o2 = o2
       end
       write_result(result, oprot, 'commit_txn', seqid)
+    end
+
+    def process_repl_tbl_writeid_state(seqid, iprot, oprot)
+      args = read_args(iprot, Repl_tbl_writeid_state_args)
+      result = Repl_tbl_writeid_state_result.new()
+      @handler.repl_tbl_writeid_state(args.rqst)
+      write_result(result, oprot, 'repl_tbl_writeid_state', seqid)
     end
 
     def process_get_valid_write_ids(seqid, iprot, oprot)
@@ -5873,6 +5982,42 @@ module ThriftHiveMetastore
         result.o2 = o2
       end
       write_result(result, oprot, 'get_serde', seqid)
+    end
+
+    def process_get_lock_materialization_rebuild(seqid, iprot, oprot)
+      args = read_args(iprot, Get_lock_materialization_rebuild_args)
+      result = Get_lock_materialization_rebuild_result.new()
+      result.success = @handler.get_lock_materialization_rebuild(args.dbName, args.tableName, args.txnId)
+      write_result(result, oprot, 'get_lock_materialization_rebuild', seqid)
+    end
+
+    def process_heartbeat_lock_materialization_rebuild(seqid, iprot, oprot)
+      args = read_args(iprot, Heartbeat_lock_materialization_rebuild_args)
+      result = Heartbeat_lock_materialization_rebuild_result.new()
+      result.success = @handler.heartbeat_lock_materialization_rebuild(args.dbName, args.tableName, args.txnId)
+      write_result(result, oprot, 'heartbeat_lock_materialization_rebuild', seqid)
+    end
+
+    def process_add_runtime_stats(seqid, iprot, oprot)
+      args = read_args(iprot, Add_runtime_stats_args)
+      result = Add_runtime_stats_result.new()
+      begin
+        @handler.add_runtime_stats(args.stat)
+      rescue ::MetaException => o1
+        result.o1 = o1
+      end
+      write_result(result, oprot, 'add_runtime_stats', seqid)
+    end
+
+    def process_get_runtime_stats(seqid, iprot, oprot)
+      args = read_args(iprot, Get_runtime_stats_args)
+      result = Get_runtime_stats_result.new()
+      begin
+        result.success = @handler.get_runtime_stats(args.rqst)
+      rescue ::MetaException => o1
+        result.o1 = o1
+      end
+      write_result(result, oprot, 'get_runtime_stats', seqid)
     end
 
   end
@@ -10778,6 +10923,42 @@ module ThriftHiveMetastore
     ::Thrift::Struct.generate_accessors self
   end
 
+  class Refresh_privileges_args
+    include ::Thrift::Struct, ::Thrift::Struct_Union
+    OBJTOREFRESH = 1
+    GRANTREQUEST = 2
+
+    FIELDS = {
+      OBJTOREFRESH => {:type => ::Thrift::Types::STRUCT, :name => 'objToRefresh', :class => ::HiveObjectRef},
+      GRANTREQUEST => {:type => ::Thrift::Types::STRUCT, :name => 'grantRequest', :class => ::GrantRevokePrivilegeRequest}
+    }
+
+    def struct_fields; FIELDS; end
+
+    def validate
+    end
+
+    ::Thrift::Struct.generate_accessors self
+  end
+
+  class Refresh_privileges_result
+    include ::Thrift::Struct, ::Thrift::Struct_Union
+    SUCCESS = 0
+    O1 = 1
+
+    FIELDS = {
+      SUCCESS => {:type => ::Thrift::Types::STRUCT, :name => 'success', :class => ::GrantRevokePrivilegeResponse},
+      O1 => {:type => ::Thrift::Types::STRUCT, :name => 'o1', :class => ::MetaException}
+    }
+
+    def struct_fields; FIELDS; end
+
+    def validate
+    end
+
+    ::Thrift::Struct.generate_accessors self
+  end
+
   class Set_ugi_args
     include ::Thrift::Struct, ::Thrift::Struct_Union
     USER_NAME = 1
@@ -11360,6 +11541,37 @@ module ThriftHiveMetastore
     FIELDS = {
       O1 => {:type => ::Thrift::Types::STRUCT, :name => 'o1', :class => ::NoSuchTxnException},
       O2 => {:type => ::Thrift::Types::STRUCT, :name => 'o2', :class => ::TxnAbortedException}
+    }
+
+    def struct_fields; FIELDS; end
+
+    def validate
+    end
+
+    ::Thrift::Struct.generate_accessors self
+  end
+
+  class Repl_tbl_writeid_state_args
+    include ::Thrift::Struct, ::Thrift::Struct_Union
+    RQST = 1
+
+    FIELDS = {
+      RQST => {:type => ::Thrift::Types::STRUCT, :name => 'rqst', :class => ::ReplTblWriteIdStateRequest}
+    }
+
+    def struct_fields; FIELDS; end
+
+    def validate
+    end
+
+    ::Thrift::Struct.generate_accessors self
+  end
+
+  class Repl_tbl_writeid_state_result
+    include ::Thrift::Struct, ::Thrift::Struct_Union
+
+    FIELDS = {
+
     }
 
     def struct_fields; FIELDS; end
@@ -13291,6 +13503,144 @@ module ThriftHiveMetastore
       SUCCESS => {:type => ::Thrift::Types::STRUCT, :name => 'success', :class => ::SerDeInfo},
       O1 => {:type => ::Thrift::Types::STRUCT, :name => 'o1', :class => ::NoSuchObjectException},
       O2 => {:type => ::Thrift::Types::STRUCT, :name => 'o2', :class => ::MetaException}
+    }
+
+    def struct_fields; FIELDS; end
+
+    def validate
+    end
+
+    ::Thrift::Struct.generate_accessors self
+  end
+
+  class Get_lock_materialization_rebuild_args
+    include ::Thrift::Struct, ::Thrift::Struct_Union
+    DBNAME = 1
+    TABLENAME = 2
+    TXNID = 3
+
+    FIELDS = {
+      DBNAME => {:type => ::Thrift::Types::STRING, :name => 'dbName'},
+      TABLENAME => {:type => ::Thrift::Types::STRING, :name => 'tableName'},
+      TXNID => {:type => ::Thrift::Types::I64, :name => 'txnId'}
+    }
+
+    def struct_fields; FIELDS; end
+
+    def validate
+    end
+
+    ::Thrift::Struct.generate_accessors self
+  end
+
+  class Get_lock_materialization_rebuild_result
+    include ::Thrift::Struct, ::Thrift::Struct_Union
+    SUCCESS = 0
+
+    FIELDS = {
+      SUCCESS => {:type => ::Thrift::Types::STRUCT, :name => 'success', :class => ::LockResponse}
+    }
+
+    def struct_fields; FIELDS; end
+
+    def validate
+    end
+
+    ::Thrift::Struct.generate_accessors self
+  end
+
+  class Heartbeat_lock_materialization_rebuild_args
+    include ::Thrift::Struct, ::Thrift::Struct_Union
+    DBNAME = 1
+    TABLENAME = 2
+    TXNID = 3
+
+    FIELDS = {
+      DBNAME => {:type => ::Thrift::Types::STRING, :name => 'dbName'},
+      TABLENAME => {:type => ::Thrift::Types::STRING, :name => 'tableName'},
+      TXNID => {:type => ::Thrift::Types::I64, :name => 'txnId'}
+    }
+
+    def struct_fields; FIELDS; end
+
+    def validate
+    end
+
+    ::Thrift::Struct.generate_accessors self
+  end
+
+  class Heartbeat_lock_materialization_rebuild_result
+    include ::Thrift::Struct, ::Thrift::Struct_Union
+    SUCCESS = 0
+
+    FIELDS = {
+      SUCCESS => {:type => ::Thrift::Types::BOOL, :name => 'success'}
+    }
+
+    def struct_fields; FIELDS; end
+
+    def validate
+    end
+
+    ::Thrift::Struct.generate_accessors self
+  end
+
+  class Add_runtime_stats_args
+    include ::Thrift::Struct, ::Thrift::Struct_Union
+    STAT = 1
+
+    FIELDS = {
+      STAT => {:type => ::Thrift::Types::STRUCT, :name => 'stat', :class => ::RuntimeStat}
+    }
+
+    def struct_fields; FIELDS; end
+
+    def validate
+    end
+
+    ::Thrift::Struct.generate_accessors self
+  end
+
+  class Add_runtime_stats_result
+    include ::Thrift::Struct, ::Thrift::Struct_Union
+    O1 = 1
+
+    FIELDS = {
+      O1 => {:type => ::Thrift::Types::STRUCT, :name => 'o1', :class => ::MetaException}
+    }
+
+    def struct_fields; FIELDS; end
+
+    def validate
+    end
+
+    ::Thrift::Struct.generate_accessors self
+  end
+
+  class Get_runtime_stats_args
+    include ::Thrift::Struct, ::Thrift::Struct_Union
+    RQST = 1
+
+    FIELDS = {
+      RQST => {:type => ::Thrift::Types::STRUCT, :name => 'rqst', :class => ::GetRuntimeStatsRequest}
+    }
+
+    def struct_fields; FIELDS; end
+
+    def validate
+    end
+
+    ::Thrift::Struct.generate_accessors self
+  end
+
+  class Get_runtime_stats_result
+    include ::Thrift::Struct, ::Thrift::Struct_Union
+    SUCCESS = 0
+    O1 = 1
+
+    FIELDS = {
+      SUCCESS => {:type => ::Thrift::Types::LIST, :name => 'success', :element => {:type => ::Thrift::Types::STRUCT, :class => ::RuntimeStat}},
+      O1 => {:type => ::Thrift::Types::STRUCT, :name => 'o1', :class => ::MetaException}
     }
 
     def struct_fields; FIELDS; end
